@@ -1,0 +1,68 @@
+# Minimal Prometheus for local dev/demo — no persistence, no alerting.
+# Scrapes the portkeeper gateway's /metrics endpoint.
+#
+# Local-dev wrinkle: the gateway runs on the HOST (`go run ./cmd/gateway`),
+# not in the cluster, so Prometheus scrapes `host.docker.internal:8080`.
+# Docker Desktop resolves that name to the host from inside containers, and
+# kind pods inherit it via CoreDNS -> node resolv.conf -> Docker's DNS.
+# If you later deploy the gateway in-cluster (deploy/gateway-deployment.yaml),
+# switch the target to the gateway Service instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  labels:
+    app: prometheus
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+    scrape_configs:
+      - job_name: portkeeper-gateway
+        static_configs:
+          - targets: ["host.docker.internal:8080"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.53.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time=2h
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090

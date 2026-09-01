@@ -1,0 +1,27 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: portkeeper-controller-role
+rules:
+  - apiGroups: ["mcp.portkeeper.dev"]
+    resources: ["mcpservers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["mcp.portkeeper.dev"]
+    resources: ["mcpservers/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+# The gateway only ever reads MCPServer objects — it never writes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: portkeeper-gateway-role
+rules:
+  - apiGroups: ["mcp.portkeeper.dev"]
+    resources: ["mcpservers"]
+    verbs: ["get", "list", "watch"]

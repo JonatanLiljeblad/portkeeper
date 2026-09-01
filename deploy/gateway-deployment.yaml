@@ -1,0 +1,35 @@
+# Runs the gateway in-cluster. For local dev you can skip this entirely
+# and just `go run ./cmd/gateway` against your kind cluster's kubeconfig.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-gateway
+  labels:
+    app: mcp-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-gateway
+  template:
+    metadata:
+      labels:
+        app: mcp-gateway
+    spec:
+      serviceAccountName: mcp-gateway
+      containers:
+        - name: gateway
+          image: portkeeper/gateway:dev
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-gateway
+spec:
+  selector:
+    app: mcp-gateway
+  ports:
+    - port: 8080
+      targetPort: 8080

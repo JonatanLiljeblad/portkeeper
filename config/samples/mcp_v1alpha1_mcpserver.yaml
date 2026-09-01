@@ -1,0 +1,17 @@
+# A toy MCP server for demoing the full loop: apply this, watch the
+# controller create a Deployment + Service, then call a tool through the
+# gateway at /demo-server/<tool-name>.
+apiVersion: mcp.portkeeper.dev/v1alpha1
+kind: MCPServer
+metadata:
+  name: demo-server
+spec:
+  # Built from hack/toy-mcp-server and loaded into kind:
+  #   docker build -t toy-mcp-server:0.1 hack/toy-mcp-server
+  #   kind load docker-image toy-mcp-server:0.1
+  image: toy-mcp-server:0.1
+  port: 9000
+  tools:
+    - echo
+    - reverse-string
+  authType: none

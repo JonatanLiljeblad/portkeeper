@@ -1,0 +1,7 @@
+# Single-node kind cluster — plenty for developing/demoing the controller
+# and gateway locally. Bump to multi-node only if you later want to test
+# scheduling/scaling behavior.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
