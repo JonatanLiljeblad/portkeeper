@@ -72,6 +72,7 @@ kubectl apply -f config/samples/mcp_v1alpha1_mcpserver.yaml
 #    Optional: GATEWAY_RATE_LIMIT_RPS / GATEWAY_RATE_LIMIT_BURST tune the
 #    per-agent rate limit (defaults: 5 req/s, burst 10).
 kubectl port-forward svc/demo-server-svc 9000:9000 &
+BACKEND_FORWARD_PID=$!
 GATEWAY_BACKEND_HOST=localhost go run ./cmd/gateway
 
 # 6. Call a tool through the gateway. X-Agent-ID identifies the calling
@@ -111,5 +112,26 @@ Prometheus scrapes it at `host.docker.internal:8080` — a name Docker Desktop
 resolves to the host from inside containers, which kind pods inherit via
 CoreDNS. If you deploy the gateway in-cluster instead, point the scrape
 config in `deploy/prometheus.yaml` at the gateway Service.
+
+### Stop the local demo
+
+Press `Ctrl-C` in the terminals running the controller, gateway, Grafana
+port-forward, or traffic loop. Then stop the background backend port-forward
+and delete the cluster:
+
+```bash
+# Run this in the shell where BACKEND_FORWARD_PID was set above.
+kill "$BACKEND_FORWARD_PID"
+
+# Deletes the kind cluster and everything deployed in it, including the
+# demo server, Prometheus, and Grafana.
+kind delete cluster --name kind
+```
+
+To keep the cluster but remove only the monitoring stack:
+
+```bash
+kubectl delete -f deploy/grafana.yaml -f deploy/prometheus.yaml
+```
 
 See `Makefile` for shortcuts to the above.
