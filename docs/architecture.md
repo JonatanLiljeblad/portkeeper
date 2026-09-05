@@ -42,16 +42,42 @@
    a real `Deployment` + `Service` running that MCP server's container.
 3. The **gateway** continuously reads the set of `MCPServer` objects from
    the Kubernetes API — this is its live registry, no separate database.
-4. An MCP client connects to `/<server-name>/mcp` with `X-Agent-ID` on every
-   HTTP request. The gateway looks up the backend by server name and forwards
-   to `/mcp`. Legacy toy calls use `/<server-name>/<tool-name>`.
+4. An MCP client connects to `/<namespace>/<server-name>/mcp` with
+   `X-Agent-ID` on every HTTP request. The registry uses `NamespacedName`
+   keys. Legacy `/<server-name>/<endpoint>` routes resolve only when the
+   name is cluster-unique; ambiguity returns 409, including when one of the
+   colliding servers is unready.
 5. The backend handles MCP initialization, discovery, and tool execution.
    The gateway forwards protocol headers, bodies, responses, and cancellation
    without owning sessions or interpreting tool calls. Its response wrapper
    exposes `Unwrap` so the reverse proxy can flush SSE responses.
 6. The gateway logs and measures completed HTTP requests. Existing metric
    names say "tool calls", but MCP requests use the route label `tool="mcp"`;
-   they do not yet identify the tool inside a JSON-RPC message.
+   they do not yet identify the tool inside a JSON-RPC message. A `namespace`
+   label distinguishes same-name backends; unresolved legacy requests leave
+   it empty.
+
+## Reconciliation and readiness
+
+The controller preserves Kubernetes defaults while updating its managed
+image, port, replica count, labels, and TCP readiness probe. It will only
+mutate existing child resources controlled by that MCPServer's UID. Status
+is patched only when it changes, preserving condition transition timestamps
+and avoiding self-triggered reconciliation loops.
+
+`Ready=True` requires the current Deployment generation to have been observed
+and its rollout completed, with the desired replica updated, ready, and
+available. An available old replica cannot make an incomplete new rollout
+ready. Progress-deadline and replica failures produce `Failed`; ordinary
+startup and incomplete rollouts are `Pending`. Deleting CRs do not recreate
+children, and owner references let Kubernetes garbage-collect them.
+
+The shared `MCPServer.IsReady()` predicate rejects missing conditions, stale
+CR generations, and deleting objects. The gateway returns 503 for registered
+but unready backends, 404 for absent ones, and 502 for upstream connection
+failures. It does not retry tool calls. The registry is still polled every
+five seconds and retains its last snapshot on API failure; these guarantees
+are eventually observed, not an instantaneous health or security boundary.
 
 ## MCP interoperability boundary
 
@@ -75,8 +101,7 @@ server. Session state stays in the backend; the current one-replica workload
 avoids cross-replica session routing. Any future scaling work must explicitly
 choose sessionless backends or an appropriate session-routing strategy.
 
-Namespaced registry keys, workload-derived readiness, authenticated agent
-identity, and protocol-aware metrics remain roadmap work. Current
+Authenticated agent identity and protocol-aware metrics remain roadmap work. Current
 `X-Agent-ID` attribution and rate limiting are not access control.
 
 ## Why the controller and gateway are separate binaries

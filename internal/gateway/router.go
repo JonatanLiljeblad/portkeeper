@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -10,8 +11,8 @@ import (
 )
 
 // Router resolves each incoming request to a backend MCP server and
-// proxies it there. MCP backends use "/<server-name>/mcp"; legacy HTTP
-// tools continue to use "/<server-name>/<tool-name>".
+// proxies it there. Namespaced routes are "/<namespace>/<server>/<endpoint>";
+// legacy "/<server>/<endpoint>" routes require a cluster-unique server name.
 type Router struct {
 	registry *Registry
 	limiter  *AgentLimiter
@@ -33,26 +34,40 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	serverName, toolName, ok := parsePath(req.URL.Path)
+	namespace, serverName, toolName, ok := parsePath(req.URL.Path)
 	if !ok {
-		http.Error(w, "expected path /<server-name>/<tool-name>", http.StatusBadRequest)
+		http.Error(w, "expected /<namespace>/<server>/<endpoint> or /<server>/<endpoint>", http.StatusBadRequest)
 		return
 	}
 
-	if !rt.limiter.Allow(agentID) {
+	recorder := &statusCapturingWriter{ResponseWriter: w, status: http.StatusOK}
+	defer func() {
 		elapsed := time.Since(start)
-		log.Printf("tool_call server=%s tool=%s agent=%s status=%d latency=%s",
-			serverName, toolName, agentID, http.StatusTooManyRequests, elapsed)
-		recordCall(serverName, toolName, http.StatusTooManyRequests, elapsed)
+		log.Printf("tool_call namespace=%s server=%s tool=%s agent=%s status=%d latency=%s",
+			namespace, serverName, toolName, agentID, recorder.status, elapsed)
+		recordCall(namespace, serverName, toolName, recorder.status, elapsed)
+	}()
+	if !rt.limiter.Allow(agentID) {
 		rateLimitedTotal.WithLabelValues(agentID).Inc()
-		http.Error(w, "rate limit exceeded for agent "+agentID, http.StatusTooManyRequests)
+		http.Error(recorder, "rate limit exceeded for agent "+agentID, http.StatusTooManyRequests)
 		return
 	}
 
-	backend, found := rt.registry.ByName(serverName)
-	if !found {
-		recordCall(serverName, toolName, http.StatusNotFound, time.Since(start))
-		http.Error(w, "unknown MCP server: "+serverName, http.StatusNotFound)
+	backend, err := rt.registry.Resolve(namespace, serverName)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, ErrServerNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, ErrAmbiguousServer) {
+			status = http.StatusConflict
+		}
+		http.Error(recorder, err.Error(), status)
+		return
+	}
+	namespace = backend.Namespace
+	if !backend.Ready {
+		recorder.Header().Set("Retry-After", "5")
+		http.Error(recorder, "MCP server is not ready", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -65,21 +80,23 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	outReq.URL.Path = "/" + toolName
 	outReq.URL.RawPath = ""
 
-	statusRecorder := &statusCapturingWriter{ResponseWriter: w, status: http.StatusOK}
-	proxy.ServeHTTP(statusRecorder, outReq)
-
-	elapsed := time.Since(start)
-	log.Printf("tool_call server=%s tool=%s agent=%s status=%d latency=%s",
-		serverName, toolName, agentID, statusRecorder.status, elapsed)
-	recordCall(serverName, toolName, statusRecorder.status, elapsed)
+	proxy.ServeHTTP(recorder, outReq)
 }
 
-func parsePath(path string) (server, tool string, ok bool) {
+func parsePath(path string) (namespace, server, tool string, ok bool) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
+	if len(parts) != 2 && len(parts) != 3 {
+		return "", "", "", false
 	}
-	return parts[0], parts[1], true
+	for _, part := range parts {
+		if part == "" {
+			return "", "", "", false
+		}
+	}
+	if len(parts) == 3 {
+		return parts[0], parts[1], parts[2], true
+	}
+	return "", parts[0], parts[1], true
 }
 
 // statusCapturingWriter lets us observe the status code the reverse proxy

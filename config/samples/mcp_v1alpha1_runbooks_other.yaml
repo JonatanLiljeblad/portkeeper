@@ -1,0 +1,11 @@
+apiVersion: mcp.portkeeper.dev/v1alpha1
+kind: MCPServer
+metadata:
+  name: runbooks
+  namespace: portkeeper-other
+spec:
+  image: portkeeper/runbooks:e2e
+  port: 9001
+  tools:
+    - read_runbook
+  authType: none

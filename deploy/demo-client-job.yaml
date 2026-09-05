@@ -19,7 +19,7 @@ spec:
           image: portkeeper/demo-client:e2e
           imagePullPolicy: IfNotPresent
           args:
-            - -endpoint=http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp
+            - -endpoint=http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
             - -agent-id=kind-demo
             - -topic=gateway-routing
           securityContext:

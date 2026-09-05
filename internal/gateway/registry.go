@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -16,13 +18,18 @@ import (
 	mcpv1alpha1 "github.com/jonatan/portkeeper/api/v1alpha1"
 )
 
-// Backend is what the router needs to proxy a request: where the server
-// lives and which tools it claims to expose.
+// Backend is the router's snapshot of a server's identity, address, and readiness.
 type Backend struct {
-	Name    string
-	Address string // "<service>.<namespace>.svc.cluster.local:<port>"
-	Tools   []string
+	Namespace string
+	Name      string
+	Address   string // "<service>.<namespace>.svc.cluster.local:<port>"
+	Ready     bool
 }
+
+var (
+	ErrServerNotFound  = errors.New("unknown MCP server")
+	ErrAmbiguousServer = errors.New("server name exists in multiple namespaces; use /<namespace>/<server>/<endpoint>")
+)
 
 // Registry is the gateway's live view of MCPServer objects in the
 // cluster. v0.1 deliberately keeps this simple: poll on an interval
@@ -30,7 +37,7 @@ type Backend struct {
 // latency for the MVP. Swapping in a real informer is a natural v0.2 step.
 type Registry struct {
 	mu       sync.RWMutex
-	backends map[string]Backend // keyed by server name
+	backends map[types.NamespacedName]Backend
 	synced   bool
 
 	k8sClient client.Client
@@ -53,7 +60,7 @@ func NewRegistry() (*Registry, error) {
 	}
 
 	return &Registry{
-		backends:  make(map[string]Backend),
+		backends:  make(map[types.NamespacedName]Backend),
 		k8sClient: c,
 	}, nil
 }
@@ -93,16 +100,17 @@ func (r *Registry) refresh(ctx context.Context) {
 	// `kubectl port-forward svc/<name>-svc <port>:<port>`).
 	hostOverride := os.Getenv("GATEWAY_BACKEND_HOST")
 
-	next := make(map[string]Backend, len(list.Items))
+	next := make(map[types.NamespacedName]Backend, len(list.Items))
 	for _, item := range list.Items {
 		addr := fmt.Sprintf("%s-svc.%s.svc.cluster.local:%d", item.Name, item.Namespace, item.Spec.Port)
 		if hostOverride != "" {
 			addr = fmt.Sprintf("%s:%d", hostOverride, item.Spec.Port)
 		}
-		next[item.Name] = Backend{
-			Name:    item.Name,
-			Address: addr,
-			Tools:   item.Spec.Tools,
+		next[types.NamespacedName{Namespace: item.Namespace, Name: item.Name}] = Backend{
+			Namespace: item.Namespace,
+			Name:      item.Name,
+			Address:   addr,
+			Ready:     item.IsReady(),
 		}
 	}
 
@@ -120,26 +128,31 @@ func (r *Registry) HasSynced() bool {
 	return r.synced
 }
 
-// Lookup returns the backend that owns the given tool name, if any.
-func (r *Registry) Lookup(tool string) (Backend, bool) {
+// Resolve uses exact namespaced identity, or accepts a legacy name only when
+// it is unique across all registered servers, including unready ones.
+func (r *Registry) Resolve(namespace, name string) (Backend, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, b := range r.backends {
-		for _, t := range b.Tools {
-			if t == tool {
-				return b, true
-			}
+	if namespace != "" {
+		if b, ok := r.backends[types.NamespacedName{Namespace: namespace, Name: name}]; ok {
+			return b, nil
 		}
+		return Backend{}, ErrServerNotFound
 	}
-	return Backend{}, false
-}
-
-// ByName returns a backend directly by MCPServer name, useful when a
-// client addresses a server explicitly rather than by tool name.
-func (r *Registry) ByName(name string) (Backend, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	b, ok := r.backends[name]
-	return b, ok
+	var match Backend
+	found := false
+	for key, b := range r.backends {
+		if key.Name != name {
+			continue
+		}
+		if found {
+			return Backend{}, ErrAmbiguousServer
+		}
+		match, found = b, true
+	}
+	if !found {
+		return Backend{}, ErrServerNotFound
+	}
+	return match, nil
 }

@@ -61,8 +61,8 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum by (server, tool) (rate(mcp_gateway_tool_calls_total[1m]))",
-              "legendFormat": "{{server}} / {{tool}}"
+              "expr": "sum by (namespace, server, tool) (rate(mcp_gateway_tool_calls_total[1m]))",
+              "legendFormat": "{{namespace}} / {{server}} / {{tool}}"
             }
           ]
         },

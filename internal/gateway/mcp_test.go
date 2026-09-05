@@ -63,7 +63,7 @@ func TestMCPInteroperability(t *testing.T) {
 	t.Cleanup(cancel)
 	client := mcp.NewClient(&mcp.Implementation{Name: "portkeeper-integration", Version: "0.1.0"}, nil)
 	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: server.URL + "/demo/mcp",
+		Endpoint: server.URL + "/test/demo/mcp",
 		HTTPClient: &http.Client{
 			Transport: agentTransport{base: server.Client().Transport},
 		},

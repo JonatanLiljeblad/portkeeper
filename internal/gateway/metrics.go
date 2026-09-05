@@ -13,7 +13,7 @@ var (
 			Name: "mcp_gateway_tool_calls_total",
 			Help: "Total tool calls proxied through the gateway, by server, tool, and status.",
 		},
-		[]string{"server", "tool", "status"},
+		[]string{"namespace", "server", "tool", "status"},
 	)
 
 	toolCallDuration = prometheus.NewHistogramVec(
@@ -22,7 +22,7 @@ var (
 			Help:    "Latency of tool calls proxied through the gateway.",
 			Buckets: prometheus.DefBuckets,
 		},
-		[]string{"server", "tool"},
+		[]string{"namespace", "server", "tool"},
 	)
 
 	rateLimitedTotal = prometheus.NewCounterVec(
@@ -38,8 +38,8 @@ func init() {
 	prometheus.MustRegister(toolCallsTotal, toolCallDuration, rateLimitedTotal)
 }
 
-func recordCall(server, tool string, status int, elapsed time.Duration) {
+func recordCall(namespace, server, tool string, status int, elapsed time.Duration) {
 	statusLabel := strconv.Itoa(status)
-	toolCallsTotal.WithLabelValues(server, tool, statusLabel).Inc()
-	toolCallDuration.WithLabelValues(server, tool).Observe(elapsed.Seconds())
+	toolCallsTotal.WithLabelValues(namespace, server, tool, statusLabel).Inc()
+	toolCallDuration.WithLabelValues(namespace, server, tool).Observe(elapsed.Seconds())
 }

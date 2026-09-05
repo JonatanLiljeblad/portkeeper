@@ -9,14 +9,18 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func newTestGateway(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
 	backend := httptest.NewServer(handler)
 	t.Cleanup(backend.Close)
-	reg := &Registry{backends: map[string]Backend{
-		"demo": {Name: "demo", Address: strings.TrimPrefix(backend.URL, "http://")},
+	reg := &Registry{backends: map[types.NamespacedName]Backend{
+		{Namespace: "test", Name: "demo"}: {
+			Namespace: "test", Name: "demo", Ready: true, Address: strings.TrimPrefix(backend.URL, "http://"),
+		},
 	}}
 	server := httptest.NewServer(NewRouter(reg, NewAgentLimiter(100, 100)))
 	t.Cleanup(server.Close)
@@ -25,22 +29,24 @@ func newTestGateway(t *testing.T, handler http.Handler) *httptest.Server {
 
 func TestParsePath(t *testing.T) {
 	for _, tt := range []struct {
-		path, server, tool string
-		ok                 bool
+		path, namespace, server, tool string
+		ok                            bool
 	}{
-		{"/demo/mcp", "demo", "mcp", true},
-		{"/demo/echo", "demo", "echo", true},
-		{"/demo/reverse-string/", "demo", "reverse-string", true},
-		{"/", "", "", false},
-		{"/demo", "", "", false},
-		{"/demo//mcp", "", "", false},
-		{"/demo/mcp/extra", "", "", false},
+		{"/demo/mcp", "", "demo", "mcp", true},
+		{"/demo/echo", "", "demo", "echo", true},
+		{"/demo/reverse-string/", "", "demo", "reverse-string", true},
+		{"/test/demo/mcp", "test", "demo", "mcp", true},
+		{"/test/demo/echo/", "test", "demo", "echo", true},
+		{"/", "", "", "", false},
+		{"/demo", "", "", "", false},
+		{"/demo//mcp", "", "", "", false},
+		{"/test/demo/mcp/extra", "", "", "", false},
 	} {
 		t.Run(tt.path, func(t *testing.T) {
-			server, tool, ok := parsePath(tt.path)
-			if server != tt.server || tool != tt.tool || ok != tt.ok {
-				t.Fatalf("parsePath(%q) = (%q, %q, %v), want (%q, %q, %v)",
-					tt.path, server, tool, ok, tt.server, tt.tool, tt.ok)
+			namespace, server, tool, ok := parsePath(tt.path)
+			if namespace != tt.namespace || server != tt.server || tool != tt.tool || ok != tt.ok {
+				t.Fatalf("parsePath(%q) = (%q, %q, %q, %v), want (%q, %q, %q, %v)",
+					tt.path, namespace, server, tool, ok, tt.namespace, tt.server, tt.tool, tt.ok)
 			}
 		})
 	}
@@ -158,7 +164,7 @@ func TestRouterRejectsInvalidRequests(t *testing.T) {
 		{"unknown-server", "/missing/mcp", "test-agent", http.StatusNotFound},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			router := NewRouter(&Registry{backends: map[string]Backend{}}, NewAgentLimiter(5, 10))
+			router := NewRouter(&Registry{}, NewAgentLimiter(5, 10))
 			req := httptest.NewRequest(http.MethodPost, tt.path, nil)
 			req.Header.Set("X-Agent-ID", tt.agent)
 			rec := httptest.NewRecorder()
@@ -172,7 +178,7 @@ func TestRouterRejectsInvalidRequests(t *testing.T) {
 
 func TestRouterRateLimit(t *testing.T) {
 	// Unknown servers also consume the request budget before registry lookup.
-	router := NewRouter(&Registry{backends: map[string]Backend{}}, NewAgentLimiter(0.001, 1))
+	router := NewRouter(&Registry{}, NewAgentLimiter(0.001, 1))
 	for i, want := range []int{http.StatusNotFound, http.StatusTooManyRequests} {
 		req := httptest.NewRequest(http.MethodPost, "/missing/mcp", nil)
 		req.Header.Set("X-Agent-ID", "limited-agent")
@@ -181,6 +187,68 @@ func TestRouterRateLimit(t *testing.T) {
 		if rec.Code != want {
 			t.Fatalf("request %d: status = %d, want %d", i, rec.Code, want)
 		}
+	}
+}
+
+func TestRouterNamespaceIsolationAndReadiness(t *testing.T) {
+	reg := &Registry{backends: make(map[types.NamespacedName]Backend)}
+	for _, namespace := range []string{"team-a", "team-b"} {
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/mcp" {
+				t.Errorf("backend path = %q, want /mcp", r.URL.Path)
+			}
+			_, _ = io.WriteString(w, namespace)
+		}))
+		t.Cleanup(backend.Close)
+		reg.backends[types.NamespacedName{Namespace: namespace, Name: "shared"}] = Backend{
+			Namespace: namespace, Name: "shared", Ready: true, Address: strings.TrimPrefix(backend.URL, "http://"),
+		}
+	}
+	reg.backends[types.NamespacedName{Namespace: "team-a", Name: "pending"}] = Backend{
+		Namespace: "team-a", Name: "pending",
+	}
+	router := NewRouter(reg, NewAgentLimiter(100, 100))
+	for _, tt := range []struct {
+		path   string
+		status int
+		body   string
+	}{
+		{"/team-a/shared/mcp", 200, "team-a"},
+		{"/team-b/shared/mcp", 200, "team-b"},
+		{"/shared/mcp", 409, "multiple namespaces"},
+		{"/team-c/shared/mcp", 404, "unknown MCP server"},
+		{"/team-a/pending/mcp", 503, "not ready"},
+		{"/pending/mcp", 503, "not ready"},
+	} {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, nil)
+			req.Header.Set("X-Agent-ID", "isolation-test")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != tt.status || !strings.Contains(w.Body.String(), tt.body) {
+				t.Fatalf("response = %d %q, want %d containing %q", w.Code, w.Body.String(), tt.status, tt.body)
+			}
+			if tt.status == 503 && w.Header().Get("Retry-After") != "5" {
+				t.Fatal("unready response missing Retry-After")
+			}
+		})
+	}
+}
+
+func TestRouterConnectionFailure(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	backend.Close()
+	router := NewRouter(&Registry{backends: map[types.NamespacedName]Backend{
+		{Namespace: "test", Name: "down"}: {
+			Namespace: "test", Name: "down", Ready: true, Address: strings.TrimPrefix(backend.URL, "http://"),
+		},
+	}}, NewAgentLimiter(5, 10))
+	req := httptest.NewRequest(http.MethodPost, "/test/down/mcp", nil)
+	req.Header.Set("X-Agent-ID", "failure-test")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", w.Code)
 	}
 }
 

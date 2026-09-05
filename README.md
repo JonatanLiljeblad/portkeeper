@@ -45,6 +45,9 @@ docs/             # architecture notes
 The real MCP workflow now runs entirely in kind: an `MCPServer` resource
 creates the runbook backend, and an SDK client discovers and calls its tool
 through the in-cluster gateway. CI runs the same workflow.
+Readiness follows the current Deployment rollout, and namespaced routes
+isolate same-name backends. The demo also exercises updates, recovery,
+owned-resource recreation, and Kubernetes garbage collection.
 See [PLAN.md](./PLAN.md) for the checkpoint roadmap and acceptance criteria.
 
 ## Build and test
@@ -87,10 +90,12 @@ and a [captured successful run](docs/demo.txt).
 ### Real MCP endpoint
 
 Each backend serves Streamable HTTP at `/mcp`; clients address it through
-the gateway at `/<server-name>/mcp` and must send `X-Agent-ID` on every
+the gateway at `/<namespace>/<server-name>/mcp` and must send `X-Agent-ID` on every
 request. The gateway forwards the body, protocol/session headers, and
 streamed responses rather than aggregating tools or terminating MCP.
-Legacy `/<server-name>/<tool-name>` HTTP routes are unchanged.
+Legacy `/<server-name>/<endpoint>` routes work when the server name is unique
+across the cluster; ambiguous names return **409 Conflict** rather than
+selecting an arbitrary backend. Namespaced toy routes also work.
 
 The read-only demo backend embeds two operational runbooks and exposes
 `read_runbook` with the topics `gateway-routing` and `rate-limiting`. It
@@ -106,11 +111,18 @@ register the backend with Kubernetes or start a gateway. The integration
 test above starts both HTTP servers with an in-memory registry entry,
 connects an actual SDK client, discovers the tool, and reads both documents.
 
-Current limitations: registry lookup is name-only across namespaces;
-agent IDs are self-reported; rate limits count HTTP requests, including
+Known but unready servers return **503** with `Retry-After: 5`; unknown
+servers return **404**. A failed connection to a cached-ready backend returns
+**502**. Readiness uses current-generation conditions and Deployment
+availability with a TCP probe; it is not an application-level MCP health check.
+The registry polls every five seconds and retains its previous snapshot on
+API errors, so status changes are not instantaneous.
+
+Current limitations: agent IDs are self-reported; rate limits count HTTP requests, including
 MCP control messages. Existing metrics use `tool="mcp"` for these requests
-and record long-lived streams only when they finish. Readiness, identity,
-and protocol-aware observability have separate checkpoints.
+and record long-lived streams only when they finish. Metrics and logs include
+the resolved namespace; unresolved legacy requests have an empty namespace.
+Authentication and protocol-aware observability remain roadmap work.
 
 ## Local development
 

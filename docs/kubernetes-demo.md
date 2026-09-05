@@ -30,19 +30,35 @@ The captured walkthrough shows these stages:
 
 1. Install the CRD, namespaces, controller, ServiceAccounts, and role bindings.
 2. Apply `config/samples/mcp_v1alpha1_runbooks.yaml`. The controller creates
-   an owned Deployment and Service in `portkeeper-demo`.
+   an owned Deployment and Service in `portkeeper-demo`. Wait for the CR's
+   current-generation Ready condition as well as the Deployment.
 3. Wait for the backend Deployment, then start the gateway in
    `portkeeper-system`. Its readiness probe waits for its first successful
    registry list. Confirm that its service account can list MCPServers but
    cannot create them or read Secrets.
 4. Run `deploy/demo-client-job.yaml`. The SDK client connects to
-   `http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp`,
+   `http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp`,
    discovers `read_runbook`, and reads `gateway-routing`.
+5. Declare another `runbooks` server in `portkeeper-other`. Call it by
+   namespace, observe 409 for the ambiguous old URL and 404 for a missing
+   server.
+6. Change the first server to a missing image, then an unreachable port.
+   Observe `Ready=False` and 503, restore each change, and call the recovered
+   backend.
+7. Delete the managed Deployment and Service, confirm replacement UIDs,
+   and call the recreated backend. Delete the second CR with foreground
+   propagation and observe its children being garbage-collected. Its
+   namespaced URL becomes 404; the remaining unique legacy URL works again.
 
 The client Job has no Kubernetes API token, no automatic Job retry, and no
 application-level tool-call retry. It uses the gateway Service, not direct
 backend access or a host port-forward. A failed tool response causes a
 nonzero exit rather than a success-shaped transcript.
+Lifecycle client Pods also have no API token. The `-expect-status` mode
+polls HTTP GET only, with a deadline, to wait for the registry's asynchronous
+changes. It never retries a tool call. A routed GET without a session returns
+400 from this stateful SDK backend; the demo uses that response before
+starting a new SDK session after recovery.
 
 See [demo.txt](demo.txt) for an actual captured run. It is a terminal
 transcript, not a benchmark. Pod timing and Service IPs vary between runs.
@@ -63,7 +79,7 @@ kubectl port-forward -n portkeeper-system svc/mcp-gateway 8080:8080
 
 # In another terminal:
 go run ./hack/mcp-client \
-  -endpoint http://127.0.0.1:8080/runbooks/mcp \
+  -endpoint http://127.0.0.1:8080/portkeeper-demo/runbooks/mcp \
   -agent-id local-demo \
   -topic rate-limiting
 ```
@@ -93,11 +109,13 @@ kind node image.
 ## Current boundaries
 
 Gateway readiness indicates initial registry synchronization, not backend
-health or continuing API availability. The demo explicitly waits for the
-backend Deployment rather than trusting the CR's current `Ready` phase.
-Lifecycle correctness and namespace-aware routing are checkpoint 3.
+health or continuing API availability. Backend Ready conditions represent
+current-generation Deployment availability and a successful TCP probe, not
+MCP application semantics. Cache updates occur every five seconds; API
+errors retain the previous snapshot.
 
 The current controller and gateway can observe resources across namespaces,
-but server names must still be globally unique. RBAC limits the gateway's
+and identical server names are isolated by their namespace. Legacy URLs
+require a unique name. RBAC limits the gateway's
 Kubernetes API access; it does not authenticate MCP clients or prevent
 clients from reaching backend Services directly. Those are checkpoint 4.

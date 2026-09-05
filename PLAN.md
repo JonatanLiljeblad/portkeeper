@@ -69,7 +69,7 @@ prerequisites; CI proves it against Kubernetes rather than a registry stub.
 
 ### 3. Trustworthy Kubernetes lifecycle
 
-Status: pending.
+Status: complete.
 
 - Derive readiness and meaningful conditions from observed Deployment
   availability and generation, not successful resource creation.
@@ -83,6 +83,18 @@ Status: pending.
 Acceptance: an unavailable backend is not advertised as ready; same-name
 servers in different namespaces cannot silently overwrite one another;
 deletion and recovery scenarios have repeatable coverage.
+
+Compatibility decision: use `/<namespace>/<server>/<endpoint>` as the
+canonical route. Preserve `/<server>/<endpoint>` only when its name is
+unique across namespaces; otherwise return 409. Known unready backends
+return 503, unknown servers 404, and failed upstream connections 502.
+
+Delivered: current-generation Ready conditions with TCP-probed Deployment
+availability, default-preserving reconciliation, ownership checks, and
+namespace-aware registry/metrics. `make e2e` now exercises same-name servers,
+broken image/port updates, recovery, child recreation, and foreground
+garbage collection. Gateway polling remains eventually consistent; readiness
+does not assert MCP application health.
 
 ### 4. Verified identity and per-server policy
 

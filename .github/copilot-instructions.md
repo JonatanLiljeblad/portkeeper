@@ -9,28 +9,32 @@ servers. Its control plane and gateway are independently runnable binaries:
   `mcp.portkeeper.dev/v1alpha1` `MCPServer` CR is reconciled into a one-replica
   `Deployment` named after the CR and a `<mcpserver-name>-svc` `Service`. Both
   resources must retain their controller reference and the
-  `mcp.portkeeper.dev/server: <name>` selector/label contract. Successful
-  reconciliation sets `status.phase` to `Ready` and
-  `status.observedGeneration`.
+  `mcp.portkeeper.dev/server: <name>` selector/label contract. Readiness
+  follows the current Deployment rollout and TCP probe, not resource creation.
+  Preserve Kubernetes defaults during mutation and patch status only on
+  changes. Never adopt resources not controlled by the CR's UID.
 - `cmd/gateway` is the request-serving path. `internal/gateway.Registry` polls
   all `MCPServer` resources every five seconds and constructs backend addresses
   as `<name>-svc.<namespace>.svc.cluster.local:<port>`. When running the
   gateway on the host, `GATEWAY_BACKEND_HOST` replaces the DNS host while a
   same-port `kubectl port-forward` supplies connectivity.
 
-The gateway accepts `/<server-name>/mcp` for Streamable HTTP and
-`/<server-name>/<tool-name>` for legacy toy routes. It requires an
-`X-Agent-ID` header on every request. It strips the server-name prefix before
-reverse proxying,
+The gateway accepts `/<namespace>/<server-name>/mcp` for Streamable HTTP and
+`/<namespace>/<server-name>/<tool-name>` for toy routes. Legacy two-segment
+paths work only for cluster-unique server names; ambiguity returns 409.
+It requires `X-Agent-ID` on every request. It strips the routing prefix before reverse proxying,
 and records a structured `tool_call` log plus Prometheus metrics for proxied
 and rate-limited calls. Keep these routing, attribution, and metric-label
 semantics consistent when changing gateway behavior. `/metrics` is exposed on
 the gateway's HTTP server. The controller metrics server uses `:8081`; the
 gateway defaults to `:8080`.
 
-The `tools` field is registry metadata today; live HTTP routing uses the
-server name (`Registry.ByName`), while `Registry.Lookup` supports future
-tool-only lookup. Per-agent rate limits are in-memory and process-local:
+The `tools` field is metadata; live HTTP routing uses `Registry.Resolve`
+and `types.NamespacedName` keys, not tool-only discovery. Use
+`MCPServer.IsReady()` as the shared current-generation condition predicate.
+Registered-but-unready servers return 503, absent servers 404, and upstream
+connection failures 502. Registry polling is asynchronous and retains the
+previous snapshot on API errors. Per-agent rate limits are in-memory and process-local:
 `GATEWAY_RATE_LIMIT_RPS` defaults to `5` and `GATEWAY_RATE_LIMIT_BURST` to
 `10`. Invalid values are fatal at startup.
 
@@ -83,6 +87,8 @@ names, captures logs, and deletes the cluster it created. `KEEP_CLUSTER=1`
 retains it and prints exact access/cleanup commands. See
 `docs/kubernetes-demo.md`. The root Dockerfile's `controller`, `gateway`,
 `runbooks`, and `demo-client` targets produce the four local images.
+The workflow also covers duplicate names, broken image/port updates,
+recovery, child recreation, and real Kubernetes garbage collection.
 
 ## Kubernetes API and generated configuration
 
@@ -104,7 +110,8 @@ retains it and prints exact access/cleanup commands. See
 - `/readyz` is an unauthenticated initial-registry-sync signal used by the
   gateway Deployment; it does not promise backend health or cache freshness.
 - In-cluster controller/gateway manifests live in `portkeeper-system`; the
-  real MCP sample and client Job live in `portkeeper-demo`. Keep
+  primary MCP sample and client Job live in `portkeeper-demo`, with a
+  same-name lifecycle sample in `portkeeper-other`. Keep
   `deploy/rbac.yaml` account namespaces aligned with these Deployments.
 - CI uses the same `make e2e` script and uploads only
   `artifacts/e2e.*/logs/`. Never include generated kubeconfigs in artifacts.
@@ -116,7 +123,7 @@ retains it and prints exact access/cleanup commands. See
   streams are recorded when they finish.
 - Gateway metrics are registered globally in `internal/gateway/metrics.go` and
   are consumed by the Grafana dashboard in `deploy/grafana.yaml`. Preserve
-  `server`, `tool`, and `status` labels for tool-call counters, and `agent` for
+  `namespace`, `server`, `tool`, and `status` labels for tool-call counters, and `agent` for
   rate-limit counters unless updating the dashboard and Prometheus queries too.
 - `deploy/prometheus.yaml` intentionally scrapes
   `host.docker.internal:8080` for host-run gateway development. If changing to

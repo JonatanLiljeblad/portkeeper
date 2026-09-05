@@ -39,6 +39,37 @@ k() {
   kubectl --kubeconfig "$kubeconfig" --context "kind-$cluster" "$@"
 }
 
+wait_ready() {
+  local namespace name value generation
+  namespace="$1"
+  name="$2"
+  value="$3"
+  generation="$(k get -n "$namespace" mcpserver "$name" -o 'jsonpath={.metadata.generation}')"
+  k wait -n "$namespace" --for="jsonpath={.status.observedGeneration}=$generation" "mcpserver/$name" --timeout=90s
+  k wait -n "$namespace" --for="condition=Ready=$value" "mcpserver/$name" --timeout=120s
+}
+
+run_client() {
+  local pod route
+  pod="$1"
+  route="$2"
+  shift 2
+  k run -n portkeeper-demo "$pod" --image=portkeeper/demo-client:e2e \
+    --image-pull-policy=IfNotPresent --restart=Never \
+    --overrides='{"spec":{"automountServiceAccountToken":false,"activeDeadlineSeconds":60}}' \
+    -- "-endpoint=http://mcp-gateway.portkeeper-system.svc.cluster.local:8080$route" \
+    "-agent-id=$pod" -timeout=45s "$@"
+  if ! k wait -n portkeeper-demo --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" --timeout=75s; then
+    k logs -n portkeeper-demo "$pod" | tee "$log_dir/$pod.log" >&2
+    return 1
+  fi
+  k logs -n portkeeper-demo "$pod" | tee "$log_dir/$pod.log"
+}
+
+probe() {
+  run_client "$1" "$2" "-expect-status=$3"
+}
+
 collect_logs() {
   k get pods -A -o wide >"$log_dir/pods.log" 2>&1 || echo "Could not collect pod status" >&2
   k get events -A --sort-by=.metadata.creationTimestamp >"$log_dir/events.log" 2>&1 || echo "Could not collect events" >&2
@@ -104,6 +135,7 @@ demo() {
   k apply -f config/samples/mcp_v1alpha1_runbooks.yaml
   k wait -n portkeeper-demo --for=create deployment/runbooks --timeout=90s
   k rollout status -n portkeeper-demo deployment/runbooks --timeout=120s
+  wait_ready portkeeper-demo runbooks True
   k get -n portkeeper-demo mcpservers,deployments,services
   for resource in deployment/runbooks service/runbooks-svc; do
     if [[ "$(k get -n portkeeper-demo "$resource" -o 'jsonpath={.metadata.ownerReferences[0].kind}')" != MCPServer ]]; then
@@ -133,6 +165,47 @@ demo() {
   grep -Fq 'Discovered tool: read_runbook' "$log_dir/client.log"
   grep -Fq '# Gateway routing' "$log_dir/client.log"
   grep -Fq 'MCP discovery and tool call completed.' "$log_dir/client.log"
+
+  echo "=== 5. Isolate same-name backends in different namespaces ==="
+  k apply -f config/samples/mcp_v1alpha1_runbooks_other.yaml
+  wait_ready portkeeper-other runbooks True
+  # Stateful MCP GET without a session returns 400 once the backend is routed.
+  probe other-ready /portkeeper-other/runbooks/mcp 400
+  run_client other-client /portkeeper-other/runbooks/mcp
+  probe ambiguous-name /runbooks/mcp 409
+  probe missing-server /portkeeper-demo/missing/mcp 404
+
+  echo "=== 6. Reject stale readiness during image and port updates, then recover ==="
+  k patch -n portkeeper-demo mcpserver runbooks --type=merge -p '{"spec":{"image":"portkeeper/runbooks:missing"}}'
+  wait_ready portkeeper-demo runbooks False
+  probe unavailable-image /portkeeper-demo/runbooks/mcp 503
+  k patch -n portkeeper-demo mcpserver runbooks --type=merge -p '{"spec":{"image":"portkeeper/runbooks:e2e"}}'
+  wait_ready portkeeper-demo runbooks True
+  k patch -n portkeeper-demo mcpserver runbooks --type=merge -p '{"spec":{"port":9002}}'
+  wait_ready portkeeper-demo runbooks False
+  probe unavailable-port /portkeeper-demo/runbooks/mcp 503
+  k patch -n portkeeper-demo mcpserver runbooks --type=merge -p '{"spec":{"port":9001}}'
+  wait_ready portkeeper-demo runbooks True
+  probe recovered-route /portkeeper-demo/runbooks/mcp 400
+  run_client recovered-client /portkeeper-demo/runbooks/mcp
+
+  echo "=== 7. Recreate owned resources and garbage-collect deleted servers ==="
+  old_deployment="$(k get -n portkeeper-demo deployment/runbooks -o 'jsonpath={.metadata.uid}')"
+  old_service="$(k get -n portkeeper-demo service/runbooks-svc -o 'jsonpath={.metadata.uid}')"
+  k delete -n portkeeper-demo deployment/runbooks service/runbooks-svc --wait=true
+  k wait -n portkeeper-demo --for=create deployment/runbooks --timeout=90s
+  k wait -n portkeeper-demo --for=create service/runbooks-svc --timeout=90s
+  k rollout status -n portkeeper-demo deployment/runbooks --timeout=120s
+  wait_ready portkeeper-demo runbooks True
+  test "$(k get -n portkeeper-demo deployment/runbooks -o 'jsonpath={.metadata.uid}')" != "$old_deployment"
+  test "$(k get -n portkeeper-demo service/runbooks-svc -o 'jsonpath={.metadata.uid}')" != "$old_service"
+  probe recreated-route /portkeeper-demo/runbooks/mcp 400
+  run_client recreated-client /portkeeper-demo/runbooks/mcp
+  k delete -n portkeeper-other mcpserver/runbooks --cascade=foreground --wait=true --timeout=90s
+  k wait -n portkeeper-other --for=delete deployment/runbooks service/runbooks-svc --timeout=90s
+  probe deleted-route /portkeeper-other/runbooks/mcp 404
+  probe legacy-unique /runbooks/mcp 400
+  run_client legacy-client /runbooks/mcp
   echo "=== Kubernetes MCP workflow completed ==="
 }
 
