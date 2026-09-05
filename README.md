@@ -14,8 +14,9 @@ for containers.
 - **Gateway**: a single entrypoint that all clients/agents talk to. It looks
   up the live registry via the Kubernetes API and routes each request to the
   right backend.
-- **Observability**: every proxied tool call is logged (and exported as a
-  Prometheus metric) — server, tool, latency, status.
+- **Observability**: proxied HTTP requests are logged and exported as
+  Prometheus metrics. For MCP endpoints these are transport-request metrics,
+  not individual tool-call metrics.
 
 See [PLAN.md](./PLAN.md) for the full design rationale and roadmap, and
 [docs/architecture.md](./docs/architecture.md) for how the pieces fit
@@ -35,19 +36,65 @@ config/
   crd/            # generated CRD YAML
   samples/        # example MCPServer objects
   rbac/           # controller's RBAC permissions
-  manager/        # Deployment manifest for the controller itself
 deploy/           # kind cluster config + gateway deployment manifest
 docs/             # architecture notes
 ```
 
 ## Status
 
-v0.1 (MVP) in progress — see PLAN.md for exactly what's in and out of scope.
+Checkpoint 1 adds real MCP client/server interoperability through the gateway
+using the official Go SDK. The existing kind demo still uses the toy HTTP
+backend; packaging the real workflow for Kubernetes is checkpoint 2.
+See [PLAN.md](./PLAN.md) for the checkpoint roadmap and acceptance criteria.
+
+## Build and test
+
+The root module requires Go 1.25 or newer (required by the pinned official
+MCP SDK). The standalone toy backend retains its own module.
+
+```bash
+make build
+make test
+
+# Real SDK client -> gateway -> runbook MCP server, without a cluster.
+go test -race ./internal/gateway -run '^TestMCPInteroperability$' -count=1 -v
+
+# Focused streaming and cancellation regression.
+go test -race ./internal/gateway -run '^TestRouterStreamsAndCancels$' -count=1
+```
+
+### Real MCP endpoint
+
+Each backend serves Streamable HTTP at `/mcp`; clients address it through
+the gateway at `/<server-name>/mcp` and must send `X-Agent-ID` on every
+request. The gateway forwards the body, protocol/session headers, and
+streamed responses rather than aggregating tools or terminating MCP.
+Legacy `/<server-name>/<tool-name>` HTTP routes are unchanged.
+
+The read-only demo backend embeds two operational runbooks and exposes
+`read_runbook` with the topics `gateway-routing` and `rate-limiting`. It
+cannot read arbitrary files or execute commands. To run the backend alone:
+
+```bash
+make run-runbook-server
+# MCP endpoint: http://127.0.0.1:9001/mcp
+```
+
+`RUNBOOK_ADDR` overrides the loopback-only default. This command does not
+register the backend with Kubernetes or start a gateway. The integration
+test above starts both HTTP servers with an in-memory registry entry,
+connects an actual SDK client, discovers the tool, and reads both documents.
+
+Current limitations: registry lookup is name-only across namespaces;
+agent IDs are self-reported; rate limits count HTTP requests, including
+MCP control messages. Existing metrics use `tool="mcp"` for these requests
+and record long-lived streams only when they finish. Readiness, identity,
+and protocol-aware observability have separate checkpoints.
 
 ## Local development
 
-This is built to run on [`kind`](https://kind.sigs.k8s.io/) (Kubernetes-in-Docker)
-so you don't need real cloud infra to iterate.
+The existing toy demo runs on [`kind`](https://kind.sigs.k8s.io/)
+(Kubernetes-in-Docker) so you don't need real cloud infra to iterate.
 
 ```bash
 # 0. Build the toy demo MCP server image (used by config/samples/)

@@ -1,4 +1,4 @@
-.PHONY: tidy build manifests generate toy-image kind-up kind-down install-crds run-controller run-gateway apply-sample monitoring-up grafana-forward
+.PHONY: tidy build test manifests generate toy-image kind-up kind-down install-crds run-controller run-gateway run-runbook-server apply-sample monitoring-up grafana-forward
 
 CONTROLLER_GEN := go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5
 
@@ -7,6 +7,9 @@ tidy:
 
 build:
 	go build ./...
+
+test:
+	go test -race ./...
 
 # Regenerate config/crd/bases from the Go types in api/v1alpha1.
 manifests:
@@ -33,6 +36,9 @@ run-controller:
 
 run-gateway:
 	go run ./cmd/gateway
+
+run-runbook-server:
+	go run ./hack/runbook-mcp-server
 
 apply-sample:
 	kubectl apply -f config/samples/mcp_v1alpha1_mcpserver.yaml

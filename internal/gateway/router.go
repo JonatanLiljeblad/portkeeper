@@ -10,10 +10,8 @@ import (
 )
 
 // Router resolves each incoming request to a backend MCP server and
-// proxies it there. Routing convention for v0.1: path is
-// "/<server-name>/<tool-name>"; this is intentionally simple and can grow
-// (e.g. resolve by tool name alone, across servers) once the core proves
-// out.
+// proxies it there. MCP backends use "/<server-name>/mcp"; legacy HTTP
+// tools continue to use "/<server-name>/<tool-name>".
 type Router struct {
 	registry *Registry
 	limiter  *AgentLimiter
@@ -61,8 +59,8 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	target := &url.URL{Scheme: "http", Host: backend.Address}
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
-	// The backend serves tools at "/<tool-name>"; strip the
-	// "/<server-name>" routing prefix before proxying.
+	// Strip only the routing prefix. MCP bodies and protocol headers belong
+	// to the backend; the gateway does not terminate the MCP session.
 	outReq := req.Clone(req.Context())
 	outReq.URL.Path = "/" + toolName
 	outReq.URL.RawPath = ""
@@ -92,6 +90,14 @@ type statusCapturingWriter struct {
 }
 
 func (w *statusCapturingWriter) WriteHeader(code int) {
-	w.status = code
+	if code >= http.StatusOK {
+		w.status = code
+	}
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap lets http.ResponseController reach the underlying Flush support,
+// which the reverse proxy needs to deliver SSE without buffering.
+func (w *statusCapturingWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }

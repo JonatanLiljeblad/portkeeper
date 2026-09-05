@@ -1,0 +1,108 @@
+# Copilot Instructions for portkeeper
+
+## Project model
+
+portkeeper is a Go 1.25+, Kubernetes-native registry and gateway for MCP
+servers. Its control plane and gateway are independently runnable binaries:
+
+- `cmd/controller` runs the controller-runtime reconciliation loop. An
+  `mcp.portkeeper.dev/v1alpha1` `MCPServer` CR is reconciled into a one-replica
+  `Deployment` named after the CR and a `<mcpserver-name>-svc` `Service`. Both
+  resources must retain their controller reference and the
+  `mcp.portkeeper.dev/server: <name>` selector/label contract. Successful
+  reconciliation sets `status.phase` to `Ready` and
+  `status.observedGeneration`.
+- `cmd/gateway` is the request-serving path. `internal/gateway.Registry` polls
+  all `MCPServer` resources every five seconds and constructs backend addresses
+  as `<name>-svc.<namespace>.svc.cluster.local:<port>`. When running the
+  gateway on the host, `GATEWAY_BACKEND_HOST` replaces the DNS host while a
+  same-port `kubectl port-forward` supplies connectivity.
+
+The gateway accepts `/<server-name>/mcp` for Streamable HTTP and
+`/<server-name>/<tool-name>` for legacy toy routes. It requires an
+`X-Agent-ID` header on every request. It strips the server-name prefix before
+reverse proxying,
+and records a structured `tool_call` log plus Prometheus metrics for proxied
+and rate-limited calls. Keep these routing, attribution, and metric-label
+semantics consistent when changing gateway behavior. `/metrics` is exposed on
+the gateway's HTTP server. The controller metrics server uses `:8081`; the
+gateway defaults to `:8080`.
+
+The `tools` field is registry metadata today; live HTTP routing uses the
+server name (`Registry.ByName`), while `Registry.Lookup` supports future
+tool-only lookup. Per-agent rate limits are in-memory and process-local:
+`GATEWAY_RATE_LIMIT_RPS` defaults to `5` and `GATEWAY_RATE_LIMIT_BURST` to
+`10`. Invalid values are fatal at startup.
+
+`hack/toy-mcp-server` is a standalone nested Go module and demo HTTP backend,
+not part of the root module's `./...` package pattern.
+`internal/runbookmcp` and `hack/runbook-mcp-server` are in the root module
+and provide the real, read-only MCP demo backend using the official Go SDK.
+Its documentation is embedded at build time; inputs must not permit arbitrary
+filesystem reads.
+
+## Commands
+
+```bash
+# Root Go module: compile all production packages.
+make build
+
+# Run all root-module Go tests with the race detector.
+make test
+
+# Exercise an actual MCP SDK client through the gateway without Kubernetes.
+go test -race ./internal/gateway -run '^TestMCPInteroperability$' -count=1
+
+# Run the read-only MCP backend on 127.0.0.1:9001.
+make run-runbook-server
+
+# Regenerate artifacts after changing api/v1alpha1 types or kubebuilder markers.
+make generate     # api/v1alpha1/zz_generated.deepcopy.go
+make manifests    # config/crd/bases/
+
+# Reconcile root-module dependencies after intentionally changing imports.
+make tidy
+```
+
+Run `gofmt` on changed Go files. There is no repository lint target.
+
+For the kind-based end-to-end demo, build the toy image with `make toy-image`,
+create the cluster with `make kind-up`, load it with
+`kind load docker-image toy-mcp-server:0.1`, install the CRD with
+`make install-crds`, and run `make run-controller` and `make run-gateway` in
+separate terminals. The README contains the required backend port-forward and
+gateway `GATEWAY_BACKEND_HOST=localhost` setup. `make apply-sample` registers
+the demo `MCPServer`.
+
+## Kubernetes API and generated configuration
+
+- Treat `api/v1alpha1/mcpserver_types.go` as the source of truth for the CRD.
+  After changing its schema, kubebuilder markers, or registered types, run
+  both generation commands and include the resulting deepcopy and CRD changes.
+- `authType` is schema-constrained to `none` or `token`; `authSecretRef` is
+  represented in the API but is not yet consumed by the controller or gateway.
+  Do not imply that token authentication is implemented without wiring it
+  through the request path.
+- Keep `config/rbac/role.yaml` aligned with the controller's
+  `+kubebuilder:rbac` markers and the gateway's read-only registry access.
+  The controller needs write access to `MCPServer` status plus full management
+  access to owned Deployments and Services; the gateway only lists/gets/watches
+  `MCPServer` objects.
+
+## Observability and local deployment
+
+- Keep `statusCapturingWriter.Unwrap`: the reverse proxy uses
+  `http.ResponseController` to reach the underlying flush support for SSE.
+  Do not buffer streams or introduce automatic tool-call retries.
+- MCP traffic currently uses `tool="mcp"` in existing metrics. Counts and
+  rate limits are per HTTP request, not per JSON-RPC tool invocation; session
+  streams are recorded when they finish.
+- Gateway metrics are registered globally in `internal/gateway/metrics.go` and
+  are consumed by the Grafana dashboard in `deploy/grafana.yaml`. Preserve
+  `server`, `tool`, and `status` labels for tool-call counters, and `agent` for
+  rate-limit counters unless updating the dashboard and Prometheus queries too.
+- `deploy/prometheus.yaml` intentionally scrapes
+  `host.docker.internal:8080` for host-run gateway development. If changing to
+  an in-cluster gateway, point its scrape target at the gateway Service.
+- Monitoring manifests are demo-only: Grafana permits anonymous admin access
+  and neither Prometheus nor Grafana has persistence.

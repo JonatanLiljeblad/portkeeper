@@ -1,74 +1,122 @@
-# Project plan
+# Portkeeper roadmap
 
-## What this is
+## Goal
 
-A Kubernetes controller + gateway that turns "MCP servers scattered across a
-cluster" into a single, secure, observable fleet — the same shift Kubernetes
-made for containers.
+Build a Kubernetes-native MCP control plane and gateway whose claims can be
+demonstrated with real clients, reproducible deployments, failure scenarios,
+and measured results. The target users are platform teams operating internal
+MCP servers for AI agents.
 
-**Who it's for:** platform/infra teams running multiple MCP servers for
-internal AI agents.
+The architecture stays deliberately small: Go, controller-runtime, an
+`MCPServer` CRD as the registry, an independently runnable HTTP gateway,
+Prometheus/Grafana, and kind for local deployments.
 
-**Why it's worth building now:** MCP is barely a year old and its ecosystem
-norms are still forming. No one has "won" the infra layer the way Kubernetes
-won container orchestration. A working version of this — even modest — sits
-ahead of where the market's tooling actually is.
+## Starting baseline
 
-## Design principles
+The controller creates owned Deployments and Services from `MCPServer`
+resources. The gateway polls the registry, proxies toy HTTP tool routes, and
+provides self-reported agent attribution, process-local rate limiting, logs,
+and a demo metrics dashboard.
 
-1. **K8s-native, not K8s-adjacent.** The registry is a CRD (`MCPServer`), not
-   a bolted-on database. This means it fits existing RBAC/GitOps workflows
-   and `kubectl` just works against it.
-2. **Gateway as the only door in.** Clients/agents never talk to MCP servers
-   directly. Everything routes through the gateway — this is what makes
-   central auth, rate limiting, and observability possible at all.
-3. **Boring, provable core first.** v0.1 proves the control loop (declare →
-   deploy → discover → route). That loop working end-to-end is the hard,
-   credible part. Rate limiting and dashboards are easy to add later; a shaky
-   core undermines everything.
-4. **Observability from day one.** Even a single structured log line per
-   tool call. This is one of the most resume-worthy angles of the whole
-   project — cutting it now loses the strongest demo.
+This baseline does not yet establish production readiness: the toy backend
+is not an MCP implementation, `Ready` does not reflect workload availability,
+and `X-Agent-ID` is not authentication.
 
-## Why this stack
+## Delivery checkpoints
 
-| Piece | Choice | Why |
-|---|---|---|
-| Controller/operator | Go + controller-runtime (kubebuilder) | The idiomatic way K8s controllers are built — what Kubernetes itself and most CNCF projects use. |
-| CRD schema | `MCPServer` custom resource | Native discovery via the K8s API, no separate registry to keep in sync. |
-| Gateway/proxy | Go (net/http + a lightweight router) | Shares types/language with the controller; one less context switch. |
-| Auth | Simple token-based to start | Prove routing works before adding auth complexity. |
-| Observability | Structured logs + Prometheus metrics | Prometheus is the de facto K8s-world standard. |
-| Local dev | kind (Kubernetes-in-Docker) | Fast iteration with no cloud cost. |
+Each checkpoint is a reviewable implementation increment with its own
+acceptance criteria. Commit and push the completed checkpoint, explain the
+result and remaining limitations, and pause before starting the next one.
 
-## v0.1 MVP scope
+### 1. Real MCP interoperability foundation
 
-**In scope:**
-- `MCPServer` CRD (image, port, exposed tools/metadata, auth type)
-- Controller: watches `MCPServer` objects, creates/manages the matching
-  Deployment + Service
-- Gateway: reads the live `MCPServer` registry from the K8s API, proxies
-  incoming requests to the right backend by name/path
-- One structured log line per proxied tool call (tool, server, latency,
-  status)
-- End-to-end demo on `kind`: register a toy MCP server, call a tool through
-  the gateway, see it routed and logged
+Status: complete.
 
-**Explicitly out of scope for v0.1:**
-- Auto-scaling
-- Rate limiting / quotas
-- OAuth or per-agent identity
-- Any UI/dashboard
-- Multi-cluster support
+- Use the official Go MCP SDK for a useful read-only runbook backend and
+  an actual MCP client in gateway integration tests.
+- Expose a backend at `/<server-name>/mcp`, forwarding to its `/mcp`
+  Streamable HTTP endpoint. Preserve existing toy routes.
+- Preserve protocol headers, JSON bodies, streaming, cancellation, and
+  backend HTTP errors without automatically retrying tool calls.
+- Exercise discovery and tool invocation through the real gateway handler,
+  plus streaming and legacy-routing regression cases.
 
-The MVP's only job: prove that declaring a server results in it being
-deployed, discovered, and routable — with visibility into what happened.
-Everything else is a v0.2+ feature added once that loop is solid.
+Acceptance: the SDK client connects through the gateway, discovers the
+runbook tool, and retrieves a document. A flushed stream reaches the client
+before the backend closes it. This checkpoint uses local HTTP servers, not
+a simulated claim of Kubernetes end-to-end coverage.
 
-## After MVP (roughly in order of resume-value per effort)
+### 2. Reproducible Kubernetes MCP workflow
 
-1. Prometheus dashboard (cheap, great screenshot)
-2. Rate limiting per agent
-3. OAuth-based auth
-4. Auto-scaling based on call volume
-5. Minimal web UI for browsing the registry
+Status: pending.
+
+- Package the real MCP backend, controller, and gateway for kind; supply
+  working ServiceAccounts and role bindings.
+- Provide a sample `MCPServer` and an SDK-based demo client with documented
+  agent-header configuration.
+- Add a repeatable end-to-end command and CI for Go checks and the kind
+  integration workflow.
+- Record a short demo showing declaration, deployment, tool discovery, and
+  a successful call through the gateway.
+
+Acceptance: a fresh checkout can reproduce the workflow with documented
+prerequisites; CI proves it against Kubernetes rather than a registry stub.
+
+### 3. Trustworthy Kubernetes lifecycle
+
+Status: pending.
+
+- Derive readiness and meaningful conditions from observed Deployment
+  availability and generation, not successful resource creation.
+- Introduce namespace-aware registry keys and routing with an explicit
+  compatibility decision for existing name-only URLs.
+- Cover repeated reconciliation, spec changes, owned-resource recreation,
+  and garbage collection.
+- Define client-visible behavior for unknown, unready, and failed backends.
+  Preserve cancellation and avoid automatic retries of side-effecting calls.
+
+Acceptance: an unavailable backend is not advertised as ready; same-name
+servers in different namespaces cannot silently overwrite one another;
+deletion and recovery scenarios have repeatable coverage.
+
+### 4. Verified identity and per-server policy
+
+Status: pending.
+
+- Choose and document a supported authentication flow before implementation.
+  Distinguish client-to-gateway identity from backend credentials.
+- Authorize verified agents per server; derive rate limits and audit identity
+  from authentication rather than trusting an arbitrary header.
+- Demonstrate deployment-level gateway-bypass prevention using network
+  isolation, with a local cluster setup that actually enforces the policy.
+- Bound per-agent limiter state and document replica-local semantics before
+  considering a shared rate-limit service.
+
+Acceptance: one authenticated agent is allowed and another denied; spoofing
+`X-Agent-ID` does not bypass policy; direct backend access is blocked in the
+documented deployment.
+
+### 5. Operational evidence and portfolio release
+
+Status: pending.
+
+- Compare direct-backend and gateway latency under a documented workload,
+  including concurrency and streaming. Publish hardware, methodology, and
+  measured overhead rather than invented performance targets.
+- Demonstrate backend pod failure and recovery, including client errors,
+  controller conditions, logs, and metrics.
+- Distinguish transport requests from actual MCP tool invocations in
+  observability; define label-cardinality limits and session behavior.
+- Publish concise architecture decisions, known limitations, a release,
+  and a short walkthrough.
+
+Acceptance: another developer can reproduce the measurements and failure
+demo, and each reliability or security claim points to concrete evidence.
+
+## Scope guardrails
+
+Use one MCP endpoint per backend before attempting tool aggregation. Keep
+the existing controller/gateway separation and CRD-backed registry. Prefer
+protocol correctness, lifecycle behavior, and evidence over a UI, Redis,
+autoscaling, or multi-cluster support. Revisit those only for a demonstrated
+need.
