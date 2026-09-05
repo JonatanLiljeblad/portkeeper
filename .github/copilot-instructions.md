@@ -50,6 +50,9 @@ make build
 # Run all root-module Go tests with the race detector.
 make test
 
+# Build images and exercise actual Kubernetes discovery/routing in kind.
+make e2e
+
 # Exercise an actual MCP SDK client through the gateway without Kubernetes.
 go test -race ./internal/gateway -run '^TestMCPInteroperability$' -count=1
 
@@ -74,6 +77,13 @@ separate terminals. The README contains the required backend port-forward and
 gateway `GATEWAY_BACKEND_HOST=localhost` setup. `make apply-sample` registers
 the demo `MCPServer`.
 
+For the real MCP workflow, use `make e2e`, not the legacy toy-image targets.
+It creates its own named cluster and kubeconfig, refuses existing cluster
+names, captures logs, and deletes the cluster it created. `KEEP_CLUSTER=1`
+retains it and prints exact access/cleanup commands. See
+`docs/kubernetes-demo.md`. The root Dockerfile's `controller`, `gateway`,
+`runbooks`, and `demo-client` targets produce the four local images.
+
 ## Kubernetes API and generated configuration
 
 - Treat `api/v1alpha1/mcpserver_types.go` as the source of truth for the CRD.
@@ -91,6 +101,13 @@ the demo `MCPServer`.
 
 ## Observability and local deployment
 
+- `/readyz` is an unauthenticated initial-registry-sync signal used by the
+  gateway Deployment; it does not promise backend health or cache freshness.
+- In-cluster controller/gateway manifests live in `portkeeper-system`; the
+  real MCP sample and client Job live in `portkeeper-demo`. Keep
+  `deploy/rbac.yaml` account namespaces aligned with these Deployments.
+- CI uses the same `make e2e` script and uploads only
+  `artifacts/e2e.*/logs/`. Never include generated kubeconfigs in artifacts.
 - Keep `statusCapturingWriter.Unwrap`: the reverse proxy uses
   `http.ResponseController` to reach the underlying flush support for SSE.
   Do not buffer streams or introduce automatic tool-call retries.

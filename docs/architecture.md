@@ -60,6 +60,16 @@ official Go MCP SDK; `hack/runbook-mcp-server` serves it on loopback by
 default. Gateway integration tests use an SDK client and actual HTTP servers,
 with an in-memory registry entry rather than Kubernetes discovery.
 
+`make e2e` covers the separate Kubernetes boundary: the controller and gateway
+run in `portkeeper-system`, the `MCPServer` and backend run in
+`portkeeper-demo`, and an SDK client Job connects through the gateway's
+cluster Service. Each control-plane component uses its own ServiceAccount
+and ClusterRoleBinding. The client Job has no mounted API token.
+
+The gateway's `/readyz` endpoint becomes successful after its first registry
+list. The Deployment readiness probe uses this startup signal. It does not
+assert backend readiness or ongoing registry freshness.
+
 The gateway uses one endpoint per backend, not one virtual aggregated MCP
 server. Session state stays in the backend; the current one-replica workload
 avoids cross-replica session routing. Any future scaling work must explicitly

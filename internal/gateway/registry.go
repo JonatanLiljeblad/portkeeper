@@ -31,6 +31,7 @@ type Backend struct {
 type Registry struct {
 	mu       sync.RWMutex
 	backends map[string]Backend // keyed by server name
+	synced   bool
 
 	k8sClient client.Client
 }
@@ -107,7 +108,16 @@ func (r *Registry) refresh(ctx context.Context) {
 
 	r.mu.Lock()
 	r.backends = next
+	r.synced = true
 	r.mu.Unlock()
+}
+
+// HasSynced reports whether the initial registry list succeeded. This is a
+// startup readiness signal, not a guarantee of backend health or freshness.
+func (r *Registry) HasSynced() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.synced
 }
 
 // Lookup returns the backend that owns the given tool name, if any.

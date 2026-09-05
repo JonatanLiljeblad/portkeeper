@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portkeeper-controller
+  namespace: portkeeper-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: portkeeper-controller
+  template:
+    metadata:
+      labels:
+        app: portkeeper-controller
+    spec:
+      serviceAccountName: portkeeper-controller
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: portkeeper/controller:e2e
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

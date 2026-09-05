@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make build test
+      - run: go vet ./...
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l cmd api internal hack)"
+      - name: Check standalone toy module
+        working-directory: hack/toy-mcp-server
+        run: go test ./...
+
+  kind:
+    name: Kubernetes MCP workflow
+    needs: go
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned kind and kubectl
+        env:
+          KIND_VERSION: v0.33.0
+          KUBECTL_VERSION: v1.35.8
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLo kind "https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/kind-linux-amd64"
+          curl -fsSLo kind.sha256sum "https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/kind-linux-amd64.sha256sum"
+          # The release checksum names kind-linux-amd64.
+          mv kind kind-linux-amd64
+          sha256sum --check kind.sha256sum
+          sudo install -m 0755 kind-linux-amd64 /usr/local/bin/kind
+          curl -fsSLo kubectl "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"
+          curl -fsSLo kubectl.sha256 "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl.sha256"
+          echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+          sudo install -m 0755 kubectl /usr/local/bin/kubectl
+      - run: make e2e
+      - name: Upload demo and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kind-demo
+          path: artifacts/e2e.*/logs/
+          retention-days: 7
+          if-no-files-found: warn

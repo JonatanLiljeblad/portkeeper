@@ -48,7 +48,7 @@ a simulated claim of Kubernetes end-to-end coverage.
 
 ### 2. Reproducible Kubernetes MCP workflow
 
-Status: pending.
+Status: complete.
 
 - Package the real MCP backend, controller, and gateway for kind; supply
   working ServiceAccounts and role bindings.
@@ -56,8 +56,13 @@ Status: pending.
   agent-header configuration.
 - Add a repeatable end-to-end command and CI for Go checks and the kind
   integration workflow.
-- Record a short demo showing declaration, deployment, tool discovery, and
-  a successful call through the gateway.
+- Capture a short terminal walkthrough showing declaration, deployment,
+  tool discovery, and a successful call through the gateway.
+
+Delivered through `make e2e`, `.github/workflows/ci.yml`, and
+`docs/kubernetes-demo.md`, with an actual captured run in `docs/demo.txt`.
+The gateway's startup readiness now waits for its initial registry list;
+this does not replace the backend lifecycle work in checkpoint 3.
 
 Acceptance: a fresh checkout can reproduce the workflow with documented
 prerequisites; CI proves it against Kubernetes rather than a registry stub.

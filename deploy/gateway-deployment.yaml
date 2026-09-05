@@ -4,6 +4,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mcp-gateway
+  namespace: portkeeper-system
   labels:
     app: mcp-gateway
 spec:
@@ -17,16 +18,38 @@ spec:
         app: mcp-gateway
     spec:
       serviceAccountName: mcp-gateway
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: gateway
-          image: portkeeper/gateway:dev
+          image: portkeeper/gateway:e2e
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            periodSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: mcp-gateway
+  namespace: portkeeper-system
 spec:
   selector:
     app: mcp-gateway

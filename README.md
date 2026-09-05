@@ -42,9 +42,9 @@ docs/             # architecture notes
 
 ## Status
 
-Checkpoint 1 adds real MCP client/server interoperability through the gateway
-using the official Go SDK. The existing kind demo still uses the toy HTTP
-backend; packaging the real workflow for Kubernetes is checkpoint 2.
+The real MCP workflow now runs entirely in kind: an `MCPServer` resource
+creates the runbook backend, and an SDK client discovers and calls its tool
+through the in-cluster gateway. CI runs the same workflow.
 See [PLAN.md](./PLAN.md) for the checkpoint roadmap and acceptance criteria.
 
 ## Build and test
@@ -62,6 +62,27 @@ go test -race ./internal/gateway -run '^TestMCPInteroperability$' -count=1 -v
 # Focused streaming and cancellation regression.
 go test -race ./internal/gateway -run '^TestRouterStreamsAndCancels$' -count=1
 ```
+
+## Kubernetes MCP demo
+
+With Docker running, kind v0.33.0, and kubectl v1.35 or v1.36 installed:
+
+```bash
+make e2e
+```
+
+This builds four local images, creates an isolated kind cluster, installs the
+controller and gateway with their ServiceAccounts/RBAC, declares the runbook
+backend, and runs a real MCP client Job. The client discovers `read_runbook`
+and retrieves a document over cluster DNS through the gateway Service.
+
+The script uses its own kubeconfig and deletes only the cluster it created.
+Logs and a captured terminal walkthrough are left in
+`artifacts/e2e.*/logs/`; kubeconfigs are not included in CI artifacts.
+Use `KEEP_CLUSTER=1 make e2e` to retain the cluster for inspection.
+
+See the [walkthrough and manual client commands](docs/kubernetes-demo.md)
+and a [captured successful run](docs/demo.txt).
 
 ### Real MCP endpoint
 

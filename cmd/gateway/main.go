@@ -35,6 +35,13 @@ func main() {
 	router := gateway.NewRouter(reg, limiter)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if !reg.HasSynced() {
+			http.Error(w, "waiting for initial registry sync", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/", router)
 

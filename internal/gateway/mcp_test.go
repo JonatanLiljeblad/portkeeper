@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"strings"
@@ -9,11 +10,45 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/jonatan/portkeeper/internal/democlient"
 	"github.com/jonatan/portkeeper/internal/runbookmcp"
 )
 
 type agentTransport struct {
 	base http.RoundTripper
+}
+
+func TestMCPDemoClient(t *testing.T) {
+	server := newTestGateway(t, runbookmcp.NewHandler())
+	for _, tt := range []struct {
+		name, topic, agent string
+		wantErr            string
+	}{
+		{"success", "gateway-routing", "demo-client", ""},
+		{"tool-error", "missing", "demo-client", "rejected topic"},
+		{"missing-agent", "gateway-routing", "", "agent ID is required"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			var output bytes.Buffer
+			err := democlient.Run(ctx, server.URL+"/demo/mcp", tt.agent, tt.topic, &output)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"Discovered tool: read_runbook", "# Gateway routing", "MCP discovery and tool call completed."} {
+				if !strings.Contains(output.String(), want) {
+					t.Fatalf("output missing %q:\n%s", want, &output)
+				}
+			}
+		})
+	}
 }
 
 func (t agentTransport) RoundTrip(req *http.Request) (*http.Response, error) {

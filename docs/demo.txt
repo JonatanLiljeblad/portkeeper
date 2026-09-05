@@ -1,0 +1,61 @@
+=== 1. Install the CRD, namespaces, and controller ===
+customresourcedefinition.apiextensions.k8s.io/mcpservers.mcp.portkeeper.dev created
+customresourcedefinition.apiextensions.k8s.io/mcpservers.mcp.portkeeper.dev condition met
+namespace/portkeeper-system created
+namespace/portkeeper-demo created
+clusterrole.rbac.authorization.k8s.io/portkeeper-controller-role created
+clusterrole.rbac.authorization.k8s.io/portkeeper-gateway-role created
+serviceaccount/portkeeper-controller created
+serviceaccount/mcp-gateway created
+clusterrolebinding.rbac.authorization.k8s.io/portkeeper-controller created
+clusterrolebinding.rbac.authorization.k8s.io/portkeeper-gateway created
+deployment.apps/portkeeper-controller created
+Waiting for deployment "portkeeper-controller" rollout to finish: 0 of 1 updated replicas are available...
+deployment "portkeeper-controller" successfully rolled out
+=== 2. Declare a real MCP backend; wait for its Deployment ===
+mcpserver.mcp.portkeeper.dev/runbooks created
+deployment.apps/runbooks condition met
+Waiting for deployment "runbooks" rollout to finish: 0 of 1 updated replicas are available...
+deployment "runbooks" successfully rolled out
+NAME                                    IMAGE                     PHASE
+mcpserver.mcp.portkeeper.dev/runbooks   portkeeper/runbooks:e2e   Ready
+
+NAME                       READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/runbooks   1/1     1            1           1s
+
+NAME                   TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+service/runbooks-svc   ClusterIP   10.96.179.196   <none>        9001/TCP   1s
+=== 3. Start the gateway and verify its read-only registry access ===
+deployment.apps/mcp-gateway created
+service/mcp-gateway created
+Waiting for deployment "mcp-gateway" rollout to finish: 0 of 1 updated replicas are available...
+deployment "mcp-gateway" successfully rolled out
+yes
+Gateway cannot create mcpservers.
+Gateway cannot get secrets.
+=== 4. Run the SDK client inside Kubernetes through the gateway Service ===
+job.batch/mcp-demo-client created
+job.batch/mcp-demo-client condition met
+Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp as kind-demo
+Discovered tool: read_runbook
+# Gateway routing
+
+A real MCP backend is reached at `/<server-name>/mcp`; Portkeeper removes
+the server prefix and forwards the request to `/mcp` on the backend.
+Configure the client to send `X-Agent-ID` on every request. This header
+is an attribution label, not authenticated identity.
+
+For an unknown-server response, inspect `kubectl get mcpservers -A`.
+The gateway refreshes its registry every five seconds. Server names must
+currently be unique across namespaces because the registry uses name-only
+keys.
+
+For a bad-gateway response, inspect the backend Deployment, Service, and
+pod logs. A CR's current `Ready` phase only means resources were reconciled;
+it does not yet prove the workload is available.
+
+When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
+and forward the backend Service's port to the same local port.
+
+MCP discovery and tool call completed.
+=== Kubernetes MCP workflow completed ===
