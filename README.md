@@ -1,8 +1,6 @@
 # PortKeeper
 
-//A Kubernetes-native gateway and registry for MCP (Model Context Protocol) servers.
-
-![PortKeeper Banner](./assets/banner.png)
+![A Kubernetes-native gateway and registry for MCP (Model Context Protocol) servers.](./assets/banner.png)
 
 ## Why this exists
 
