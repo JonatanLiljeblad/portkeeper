@@ -4,6 +4,9 @@ metadata:
   name: runbooks
   namespace: portkeeper-demo
 spec:
+  allowedServiceAccounts:
+    - namespace: portkeeper-demo
+      name: mcp-demo-client
   image: portkeeper/runbooks:e2e
   port: 9001
   tools:

@@ -37,13 +37,16 @@
 ## Data flow
 
 1. An operator applies an `MCPServer` custom resource describing an MCP
-   server (image, port, exposed tools, auth type).
+   server (image, port, exposed tools, allowed client ServiceAccounts).
 2. The **controller** notices the new/changed object and reconciles it into
    a real `Deployment` + `Service` running that MCP server's container.
 3. The **gateway** continuously reads the set of `MCPServer` objects from
    the Kubernetes API — this is its live registry, no separate database.
 4. An MCP client connects to `/<namespace>/<server-name>/mcp` with
-   `X-Agent-ID` on every HTTP request. The registry uses `NamespacedName`
+   a gateway-audience ServiceAccount bearer token on every HTTP request.
+   The gateway verifies it with Kubernetes TokenReview, then authorizes the
+   verified ServiceAccount against the server's deny-by-default policy.
+   The registry uses `NamespacedName`
    keys. Legacy `/<server-name>/<endpoint>` routes resolve only when the
    name is cluster-unique; ambiguity returns 409, including when one of the
    colliding servers is unready.
@@ -51,6 +54,8 @@
    The gateway forwards protocol headers, bodies, responses, and cancellation
    without owning sessions or interpreting tool calls. Its response wrapper
    exposes `Unwrap` so the reverse proxy can flush SSE responses.
+   Gateway credentials are stripped and `X-Agent-ID` is overwritten with
+   the verified username before proxying.
 6. The gateway logs and measures completed HTTP requests. Existing metric
    names say "tool calls", but MCP requests use the route label `tool="mcp"`;
    they do not yet identify the tool inside a JSON-RPC message. A `namespace`
@@ -78,6 +83,8 @@ but unready backends, 404 for absent ones, and 502 for upstream connection
 failures. It does not retry tool calls. The registry is still polled every
 five seconds and retains its last snapshot on API failure; these guarantees
 are eventually observed, not an instantaneous health or security boundary.
+Authorization fails closed with 503 when the policy snapshot is older than
+15 seconds, even though the routing cache is retained.
 
 ## MCP interoperability boundary
 
@@ -90,7 +97,8 @@ with an in-memory registry entry rather than Kubernetes discovery.
 run in `portkeeper-system`, the `MCPServer` and backend run in
 `portkeeper-demo`, and an SDK client Job connects through the gateway's
 cluster Service. Each control-plane component uses its own ServiceAccount
-and ClusterRoleBinding. The client Job has no mounted API token.
+and ClusterRoleBinding. The client Job mounts only a short-lived,
+gateway-audience projected token, not a default API-audience token.
 
 The gateway's `/readyz` endpoint becomes successful after its first registry
 list. The Deployment readiness probe uses this startup signal. It does not
@@ -101,8 +109,10 @@ server. Session state stays in the backend; the current one-replica workload
 avoids cross-replica session routing. Any future scaling work must explicitly
 choose sessionless backends or an appropriate session-routing strategy.
 
-Authenticated agent identity and protocol-aware metrics remain roadmap work. Current
-`X-Agent-ID` attribution and rate limiting are not access control.
+The [identity and policy decision](authentication.md) describes TokenReview,
+per-server authorization, credential separation, bounded replica-local
+limiting, and the enforced backend network-isolation demo. Protocol-aware
+metrics remain roadmap work. This is not an OAuth authorization server.
 
 ## Why the controller and gateway are separate binaries
 

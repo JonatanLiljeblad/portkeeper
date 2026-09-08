@@ -22,7 +22,12 @@ servers. Its control plane and gateway are independently runnable binaries:
 The gateway accepts `/<namespace>/<server-name>/mcp` for Streamable HTTP and
 `/<namespace>/<server-name>/<tool-name>` for toy routes. Legacy two-segment
 paths work only for cluster-unique server names; ambiguity returns 409.
-It requires `X-Agent-ID` on every request. It strips the routing prefix before reverse proxying,
+It requires a Kubernetes ServiceAccount bearer token with gateway audience
+(`GATEWAY_AUTH_AUDIENCE`, default `portkeeper`) on every routed request.
+TokenReview is uncached, audience-checked, bounded to 32 concurrent calls with
+a three-second deadline. Never trust `X-Agent-ID`: overwrite it with the
+verified username upstream and strip gateway Authorization/Proxy-Authorization.
+It strips the routing prefix before reverse proxying,
 and records a structured `tool_call` log plus Prometheus metrics for proxied
 and rate-limited calls. Keep these routing, attribution, and metric-label
 semantics consistent when changing gateway behavior. `/metrics` is exposed on
@@ -36,7 +41,16 @@ Registered-but-unready servers return 503, absent servers 404, and upstream
 connection failures 502. Registry polling is asynchronous and retains the
 previous snapshot on API errors. Per-agent rate limits are in-memory and process-local:
 `GATEWAY_RATE_LIMIT_RPS` defaults to `5` and `GATEWAY_RATE_LIMIT_BURST` to
-`10`. Invalid values are fatal at startup.
+`10`. Invalid/nonfinite values are fatal at startup. Limiter state is capped
+at 10,000 identities; only fully replenished buckets idle for 15 minutes are
+evicted at capacity, otherwise new identities receive 429.
+
+`spec.allowedServiceAccounts` is deny-by-default, per-namespaced-server
+authorization, including legacy URLs. Empty policies deny everyone.
+Routing snapshots survive API errors, but policies older than 15 seconds
+must fail closed with 503. Authentication failures return 401; verified but
+unauthorized accounts receive 403 before backend readiness is disclosed.
+Existing streams are not reauthorized mid-response. See docs/authentication.md.
 
 `hack/toy-mcp-server` is a standalone nested Go module and demo HTTP backend,
 not part of the root module's `./...` package pattern.
@@ -89,21 +103,26 @@ retains it and prints exact access/cleanup commands. See
 `runbooks`, and `demo-client` targets produce the four local images.
 The workflow also covers duplicate names, broken image/port updates,
 recovery, child recreation, and real Kubernetes garbage collection.
+Its separate `deploy/kind-e2e-config.yaml` disables kind's default CNI;
+`make e2e` installs checksum-pinned Calico VXLAN to enforce NetworkPolicy.
+Backend policies combine the system namespace AND the dedicated
+`mcp.portkeeper.dev/gateway: "true"` pod label. Keep it distinct from the
+gateway Service selector so network-control pods cannot become endpoints.
+Negative Service/PodIP probes must retain their exact-target healthy controls.
 
 ## Kubernetes API and generated configuration
 
 - Treat `api/v1alpha1/mcpserver_types.go` as the source of truth for the CRD.
   After changing its schema, kubebuilder markers, or registered types, run
   both generation commands and include the resulting deepcopy and CRD changes.
-- `authType` is schema-constrained to `none` or `token`; `authSecretRef` is
-  represented in the API but is not yet consumed by the controller or gateway.
-  Do not imply that token authentication is implemented without wiring it
-  through the request path.
+- `authType` is schema-constrained to `none` or `token`; `authSecretRef` reserves
+  backend credentials and is not consumed. Do not confuse implemented
+  client-to-gateway ServiceAccount authentication with backend token injection.
 - Keep `config/rbac/role.yaml` aligned with the controller's
   `+kubebuilder:rbac` markers and the gateway's read-only registry access.
   The controller needs write access to `MCPServer` status plus full management
-  access to owned Deployments and Services; the gateway only lists/gets/watches
-  `MCPServer` objects.
+  access to owned Deployments and Services; the gateway lists/gets/watches
+  `MCPServer` objects and creates TokenReviews, but cannot read Secrets.
 
 ## Observability and local deployment
 

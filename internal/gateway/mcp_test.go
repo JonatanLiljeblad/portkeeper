@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,19 +22,23 @@ type agentTransport struct {
 
 func TestMCPDemoClient(t *testing.T) {
 	server := newTestGateway(t, runbookmcp.NewHandler())
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("test-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, tt := range []struct {
 		name, topic, agent string
 		wantErr            string
 	}{
 		{"success", "gateway-routing", "demo-client", ""},
 		{"tool-error", "missing", "demo-client", "rejected topic"},
-		{"missing-agent", "gateway-routing", "", "agent ID is required"},
+		{"no-untrusted-header-needed", "gateway-routing", "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			var output bytes.Buffer
-			err := democlient.Run(ctx, server.URL+"/demo/mcp", tt.agent, tt.topic, &output)
+			err := democlient.Run(ctx, server.URL+"/demo/mcp", democlient.Credentials{TokenFile: tokenFile, AgentID: tt.agent}, tt.topic, &output)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("error = %v, want %q", err, tt.wantErr)
@@ -54,6 +60,7 @@ func TestMCPDemoClient(t *testing.T) {
 func (t agentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	out := req.Clone(req.Context())
 	out.Header.Set("X-Agent-ID", "sdk-integration")
+	out.Header.Set("Authorization", "Bearer test-token")
 	return t.base.RoundTrip(out)
 }
 

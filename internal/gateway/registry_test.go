@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -107,5 +108,35 @@ func TestRegistryHasSynced(t *testing.T) {
 	reg.refresh(t.Context())
 	if !reg.HasSynced() {
 		t.Fatal("transient list failure reset the initial-sync signal")
+	}
+}
+
+func TestRegistryAuthorizationUpdates(t *testing.T) {
+	item := mcpv1alpha1.MCPServer{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "demo"},
+		Spec:       mcpv1alpha1.MCPServerSpec{Port: 9001, AllowedServiceAccounts: []mcpv1alpha1.ServiceAccountReference{{Namespace: "test", Name: "agent"}}},
+	}
+	c := &listClient{items: []mcpv1alpha1.MCPServer{item}}
+	reg := &Registry{k8sClient: c}
+	reg.refresh(t.Context())
+	b, err := reg.Resolve("test", "demo")
+	if err != nil || !b.allows(testPrincipal) || time.Since(b.PolicyObservedAt) > policyMaxAge {
+		t.Fatalf("initial policy=%+v, error=%v", b, err)
+	}
+	c.items[0].Spec.AllowedServiceAccounts[0].Name = "different"
+	if !b.allows(testPrincipal) {
+		t.Fatal("API list mutation changed published snapshot")
+	}
+	c.err = errors.New("API unavailable")
+	reg.refresh(t.Context())
+	retained, err := reg.Resolve("test", "demo")
+	if err != nil || !retained.PolicyObservedAt.Equal(b.PolicyObservedAt) {
+		t.Fatal("failed refresh extended authorization freshness")
+	}
+	c.err = nil
+	reg.refresh(t.Context())
+	b, err = reg.Resolve("", "demo")
+	if err != nil || b.allows(testPrincipal) {
+		t.Fatal("revoked account retained access through legacy route")
 	}
 }

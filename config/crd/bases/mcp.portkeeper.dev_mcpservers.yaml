@@ -51,16 +51,43 @@ spec:
           spec:
             description: MCPServerSpec defines the desired state of an MCPServer.
             properties:
-              authSecretRef:
+              allowedServiceAccounts:
                 description: |-
-                  AuthSecretRef optionally names a Secret containing credentials,
-                  required when AuthType is "token".
+                  AllowedServiceAccounts authorizes verified client identities for all
+                  endpoints on this server. An empty list denies every client.
+                items:
+                  description: ServiceAccountReference identifies a client ServiceAccount
+                    in this cluster.
+                  properties:
+                    name:
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                      type: string
+                    namespace:
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                  required:
+                  - name
+                  - namespace
+                  type: object
+                maxItems: 128
+                type: array
+                x-kubernetes-list-map-keys:
+                - namespace
+                - name
+                x-kubernetes-list-type: map
+              authSecretRef:
+                description: AuthSecretRef reserves a backend credential Secret; it
+                  is not consumed.
                 type: string
               authType:
                 default: none
                 description: |-
-                  AuthType describes how the gateway should authenticate to this
-                  server. v0.1 only supports "none" and "token".
+                  AuthType reserves the backend credential mechanism. Backend token
+                  injection is not implemented; this is not client authentication.
                 enum:
                 - none
                 - token
@@ -74,9 +101,8 @@ spec:
                 format: int32
                 type: integer
               tools:
-                description: |-
-                  Tools lists the tool names this server exposes. Used by the gateway
-                  to route requests without having to query the server itself first.
+                description: Tools is discovery metadata; HTTP routing resolves the
+                  server, not tools.
                 items:
                   type: string
                 type: array

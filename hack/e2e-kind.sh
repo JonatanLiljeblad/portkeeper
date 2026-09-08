@@ -6,6 +6,8 @@ root="$PWD"
 cluster="${E2E_CLUSTER_NAME:-portkeeper-e2e-$$}"
 keep="${KEEP_CLUSTER:-0}"
 node_image="kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0"
+calico_version="v3.32.0"
+calico_sha256="bccabc607685551db918f66da724893eca3e69a50c5a3e3077029b02dbab8d35"
 
 if [[ ! "$cluster" =~ ^portkeeper-e2e(-[a-z0-9-]+)?$ ]]; then
   echo "E2E_CLUSTER_NAME must be portkeeper-e2e or start with portkeeper-e2e-" >&2
@@ -15,7 +17,7 @@ if [[ "$keep" != 0 && "$keep" != 1 ]]; then
   echo "KEEP_CLUSTER must be 0 or 1" >&2
   exit 1
 fi
-for tool in docker kind kubectl; do
+for tool in docker kind kubectl curl shasum; do
   if ! command -v "$tool" >/dev/null; then
     echo "Missing prerequisite: $tool" >&2
     exit 1
@@ -50,20 +52,81 @@ wait_ready() {
 }
 
 run_client() {
-  local pod route
+  local pod route namespace token_mode token_arg arg
   pod="$1"
   route="$2"
   shift 2
-  k run -n portkeeper-demo "$pod" --image=portkeeper/demo-client:e2e \
-    --image-pull-policy=IfNotPresent --restart=Never \
-    --overrides='{"spec":{"automountServiceAccountToken":false,"activeDeadlineSeconds":60}}' \
-    -- "-endpoint=http://mcp-gateway.portkeeper-system.svc.cluster.local:8080$route" \
-    "-agent-id=$pod" -timeout=45s "$@"
-  if ! k wait -n portkeeper-demo --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" --timeout=75s; then
-    k logs -n portkeeper-demo "$pod" | tee "$log_dir/$pod.log" >&2
+  namespace="${CLIENT_NAMESPACE:-portkeeper-demo}"
+  token_mode="${CLIENT_TOKEN_MODE:-valid}"
+  token_arg=""
+  case "$token_mode" in
+    valid) token_arg="-token-file=/var/run/portkeeper/token" ;;
+    invalid) token_arg="-token-file=/var/run/portkeeper/invalid" ;;
+    none) ;;
+    *) echo "Unknown token mode: $token_mode" >&2; return 1 ;;
+  esac
+  if [[ "$route" == /* ]]; then
+    route="http://mcp-gateway.portkeeper-system.svc.cluster.local:8080$route"
+  fi
+  {
+    cat <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $pod
+  namespace: $namespace
+  labels:
+    app: mcp-demo-client
+    mcp.portkeeper.dev/gateway: "${CLIENT_GATEWAY_LABEL:-false}"
+  annotations:
+    portkeeper.dev/invalid-token: deliberately-invalid
+spec:
+  restartPolicy: Never
+  serviceAccountName: ${CLIENT_SA:-mcp-demo-client}
+  automountServiceAccountToken: false
+  activeDeadlineSeconds: 60
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  volumes:
+    - name: gateway-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              audience: ${CLIENT_AUDIENCE:-portkeeper}
+              expirationSeconds: 600
+          - downwardAPI:
+              items:
+                - path: invalid
+                  fieldRef:
+                    fieldPath: metadata.annotations['portkeeper.dev/invalid-token']
+  containers:
+    - name: client
+      image: portkeeper/demo-client:e2e
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      volumeMounts:
+        - name: gateway-token
+          mountPath: /var/run/portkeeper
+          readOnly: true
+      args:
+        - "-endpoint=$route"
+        - "-timeout=45s"
+EOF
+    if [[ -n "$token_arg" ]]; then printf '        - "%s"\n' "$token_arg"; fi
+    for arg in "$@"; do printf '        - "%s"\n' "$arg"; done
+  } | k apply -f -
+  if ! k wait -n "$namespace" --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" --timeout=75s; then
+    k logs -n "$namespace" "$pod" | tee "$log_dir/$pod.log" >&2
     return 1
   fi
-  k logs -n portkeeper-demo "$pod" | tee "$log_dir/$pod.log"
+  k logs -n "$namespace" "$pod" | tee "$log_dir/$pod.log"
 }
 
 probe() {
@@ -77,6 +140,8 @@ collect_logs() {
   k logs -n portkeeper-system deployment/mcp-gateway >"$log_dir/gateway.log" 2>&1 || echo "Gateway logs unavailable" >&2
   k logs -n portkeeper-demo deployment/runbooks >"$log_dir/runbooks.log" 2>&1 || echo "Runbook logs unavailable" >&2
   k logs -n portkeeper-demo job/mcp-demo-client >"$log_dir/client.log" 2>&1 || echo "Demo client logs unavailable" >&2
+  k logs -n kube-system daemonset/calico-node --all-containers --tail=150 >"$log_dir/calico.log" 2>&1 || echo "Calico logs unavailable" >&2
+  k get networkpolicy -A >"$log_dir/network-policies.log" 2>&1 || echo "Network policies unavailable" >&2
 }
 
 cleanup() {
@@ -117,9 +182,24 @@ for component in controller gateway runbooks demo-client; do
 done
 
 kind create cluster --name "$cluster" --kubeconfig "$kubeconfig" \
-  --config deploy/kind-config.yaml --image "$node_image" --wait 120s
+  --config deploy/kind-e2e-config.yaml --image "$node_image"
 # A failed creation must not make a pre-existing cluster eligible for cleanup.
 created=1
+curl --fail --location --silent --show-error --max-time 120 \
+  "https://raw.githubusercontent.com/projectcalico/calico/$calico_version/manifests/calico.yaml" \
+  -o "$work_dir/calico.yaml"
+echo "$calico_sha256  $work_dir/calico.yaml" | shasum -a 256 --check
+# Use VXLAN without BGP/IPIP in Docker's Linux VM, on both macOS and Linux.
+sed -e 's/calico_backend: "bird"/calico_backend: "vxlan"/' \
+  -e '/- name: CALICO_IPV4POOL_IPIP/{n;s/value: "Always"/value: "Never"/;}' \
+  -e '/- name: CALICO_IPV4POOL_VXLAN/{n;s/value: "Never"/value: "Always"/;}' \
+  -e '/- -bird-live/d' -e '/- -bird-ready/d' \
+  "$work_dir/calico.yaml" >"$work_dir/calico-vxlan.yaml"
+k create -f "$work_dir/calico-vxlan.yaml"
+k rollout status -n kube-system daemonset/calico-node --timeout=240s
+k rollout status -n kube-system deployment/calico-kube-controllers --timeout=180s
+k wait --for=condition=Ready nodes --all --timeout=120s
+k rollout status -n kube-system deployment/coredns --timeout=120s
 kind load docker-image --name "$cluster" \
   portkeeper/controller:e2e portkeeper/gateway:e2e portkeeper/runbooks:e2e portkeeper/demo-client:e2e
 
@@ -128,6 +208,7 @@ demo() {
   k apply -f config/crd/bases/
   k wait --for=condition=Established crd/mcpservers.mcp.portkeeper.dev --timeout=60s
   k apply -f deploy/namespaces.yaml
+  k apply -f deploy/backend-network-policy.yaml
   k apply -f config/rbac/role.yaml -f deploy/rbac.yaml -f deploy/controller-deployment.yaml
   k rollout status -n portkeeper-system deployment/portkeeper-controller --timeout=120s
 
@@ -144,11 +225,12 @@ demo() {
     fi
   done
 
-  echo "=== 3. Start the gateway and verify its read-only registry access ==="
+  echo "=== 3. Start the gateway; verify registry and TokenReview RBAC ==="
   k apply -f deploy/gateway-deployment.yaml
   k rollout status -n portkeeper-system deployment/mcp-gateway --timeout=120s
   gateway_identity="system:serviceaccount:portkeeper-system:mcp-gateway"
   k auth can-i list mcpservers --all-namespaces --as="$gateway_identity"
+  k auth can-i create tokenreviews.authentication.k8s.io --as="$gateway_identity"
   for permission in "create mcpservers" "get secrets"; do
     read -r verb resource <<<"$permission"
     if [[ "$(k auth can-i "$verb" "$resource" --all-namespaces --as="$gateway_identity")" != no ]]; then
@@ -166,14 +248,57 @@ demo() {
   grep -Fq '# Gateway routing' "$log_dir/client.log"
   grep -Fq 'MCP discovery and tool call completed.' "$log_dir/client.log"
 
+  echo "=== 4a. Authenticate tokens and authorize namespaced ServiceAccounts ==="
+  CLIENT_SA=mcp-denied-client probe denied-client /portkeeper-demo/runbooks/mcp 403
+  CLIENT_TOKEN_MODE=none probe missing-token /portkeeper-demo/runbooks/mcp 401
+  CLIENT_TOKEN_MODE=invalid probe invalid-token /portkeeper-demo/runbooks/mcp 401
+  CLIENT_AUDIENCE=not-portkeeper probe wrong-audience /portkeeper-demo/runbooks/mcp 401
+  CLIENT_SA=mcp-denied-client run_client spoofed-agent /portkeeper-demo/runbooks/mcp \
+    -expect-status=403 -agent-id=system:serviceaccount:portkeeper-demo:mcp-demo-client
+  CLIENT_SA=mcp-denied-client probe denied-legacy /runbooks/mcp 403
+  k patch -n portkeeper-demo mcpserver runbooks --type=merge -p '{"spec":{"allowedServiceAccounts":[]}}'
+  probe deny-by-default /portkeeper-demo/runbooks/mcp 403
+  probe deny-by-default-legacy /runbooks/mcp 403
+  k apply -f config/samples/mcp_v1alpha1_runbooks.yaml
+  wait_ready portkeeper-demo runbooks True
+  probe restored-allowlist /portkeeper-demo/runbooks/mcp 400
+
   echo "=== 5. Isolate same-name backends in different namespaces ==="
   k apply -f config/samples/mcp_v1alpha1_runbooks_other.yaml
   wait_ready portkeeper-other runbooks True
   # Stateful MCP GET without a session returns 400 once the backend is routed.
   probe other-ready /portkeeper-other/runbooks/mcp 400
   run_client other-client /portkeeper-other/runbooks/mcp
+  CLIENT_SA=mcp-denied-client probe denied-other /portkeeper-other/runbooks/mcp 403
   probe ambiguous-name /runbooks/mcp 409
   probe missing-server /portkeeper-demo/missing/mcp 404
+  CLIENT_TOKEN_MODE=none probe missing-token-legacy /runbooks/mcp 401
+
+  echo "=== 5a. Prove healthy Service/PodIP isolation in both backend namespaces ==="
+  for namespace in portkeeper-demo portkeeper-other; do
+    k rollout status -n "$namespace" deployment/runbooks --timeout=60s
+    pod_ip="$(k get pod -n "$namespace" -l mcp.portkeeper.dev/server=runbooks -o 'jsonpath={.items[0].status.podIP}')"
+    test -n "$pod_ip"
+    service="http://runbooks-svc.$namespace.svc.cluster.local:9001/mcp"
+    pod_endpoint="http://$pod_ip:9001/mcp"
+    for target in service pod; do
+      endpoint="$service"
+      if [[ "$target" == pod ]]; then endpoint="$pod_endpoint"; fi
+      # Positive HTTP control proves this exact address is healthy before/after
+      # the negative test, not merely a connectable unrelated TCP listener.
+      CLIENT_NAMESPACE=portkeeper-system CLIENT_SA=default CLIENT_GATEWAY_LABEL=true CLIENT_TOKEN_MODE=none \
+        run_client "$namespace-$target-before" "$endpoint" -expect-status=400
+      CLIENT_TOKEN_MODE=none run_client "$namespace-$target-blocked" "$endpoint" -expect-network=blocked
+      CLIENT_NAMESPACE=portkeeper-system CLIENT_SA=default CLIENT_GATEWAY_LABEL=true CLIENT_TOKEN_MODE=none \
+        run_client "$namespace-$target-after" "$endpoint" -expect-status=400
+    done
+    # A gateway label alone or membership of its namespace alone is insufficient.
+    CLIENT_GATEWAY_LABEL=true CLIENT_TOKEN_MODE=none \
+      run_client "$namespace-label-only" "$pod_endpoint" -expect-network=blocked
+    CLIENT_NAMESPACE=portkeeper-system CLIENT_SA=default CLIENT_TOKEN_MODE=none \
+      run_client "$namespace-namespace-only" "$pod_endpoint" -expect-network=blocked
+    run_client "$namespace-gateway-allowed" "/$namespace/runbooks/mcp"
+  done
 
   echo "=== 6. Reject stale readiness during image and port updates, then recover ==="
   k patch -n portkeeper-demo mcpserver runbooks --type=merge -p '{"spec":{"image":"portkeeper/runbooks:missing"}}'

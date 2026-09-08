@@ -1,6 +1,20 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  name: mcp-demo-client
+  namespace: portkeeper-demo
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-denied-client
+  namespace: portkeeper-demo
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
   name: portkeeper-controller
   namespace: portkeeper-system
 ---

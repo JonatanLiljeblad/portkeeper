@@ -6,11 +6,15 @@ package main
 
 import (
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	authenticationv1 "k8s.io/client-go/kubernetes/typed/authentication/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"github.com/jonatan/portkeeper/internal/gateway"
 )
@@ -24,6 +28,22 @@ func main() {
 	// Per-agent rate limit: sustained requests/sec plus burst capacity.
 	rps := envFloat("GATEWAY_RATE_LIMIT_RPS", 5)
 	burst := envInt("GATEWAY_RATE_LIMIT_BURST", 10)
+	audience := os.Getenv("GATEWAY_AUTH_AUDIENCE")
+	if audience == "" {
+		audience = "portkeeper"
+	}
+	cfg, err := config.GetConfig()
+	if err != nil {
+		log.Fatalf("loading authentication kube config: %v", err)
+	}
+	reviews, err := authenticationv1.NewForConfig(cfg)
+	if err != nil {
+		log.Fatalf("creating authentication client: %v", err)
+	}
+	auth, err := gateway.NewServiceAccountAuthenticator(reviews.TokenReviews(), audience)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	reg, err := gateway.NewRegistry()
 	if err != nil {
@@ -32,7 +52,7 @@ func main() {
 	reg.Start()
 
 	limiter := gateway.NewAgentLimiter(rps, burst)
-	router := gateway.NewRouter(reg, limiter)
+	router := gateway.NewRouter(reg, limiter, auth)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +66,8 @@ func main() {
 	mux.Handle("/", router)
 
 	log.Printf("gateway listening on %s (rate limit: %.3g req/s, burst %d per agent)", addr, rps, burst)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("gateway server error: %v", err)
 	}
 }
@@ -57,7 +78,7 @@ func envFloat(name string, def float64) float64 {
 		return def
 	}
 	v, err := strconv.ParseFloat(s, 64)
-	if err != nil || v <= 0 {
+	if err != nil || v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		log.Fatalf("invalid %s=%q: want a positive number", name, s)
 	}
 	return v

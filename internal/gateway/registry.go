@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -20,10 +21,24 @@ import (
 
 // Backend is the router's snapshot of a server's identity, address, and readiness.
 type Backend struct {
-	Namespace string
-	Name      string
-	Address   string // "<service>.<namespace>.svc.cluster.local:<port>"
-	Ready     bool
+	Namespace              string
+	Name                   string
+	Address                string // "<service>.<namespace>.svc.cluster.local:<port>"
+	Ready                  bool
+	AllowedServiceAccounts []mcpv1alpha1.ServiceAccountReference
+	PolicyObservedAt       time.Time
+}
+
+// Cached routing survives API errors, but stale authorization must fail closed.
+const policyMaxAge = 15 * time.Second
+
+func (b Backend) allows(principal string) bool {
+	for _, account := range b.AllowedServiceAccounts {
+		if principal == "system:serviceaccount:"+account.Namespace+":"+account.Name {
+			return true
+		}
+	}
+	return false
 }
 
 var (
@@ -87,6 +102,9 @@ func (r *Registry) Start() {
 }
 
 func (r *Registry) refresh(ctx context.Context) {
+	observedAt := time.Now()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	var list mcpv1alpha1.MCPServerList
 	if err := r.k8sClient.List(ctx, &list); err != nil {
 		log.Printf("registry: failed to list MCPServers: %v", err)
@@ -107,10 +125,12 @@ func (r *Registry) refresh(ctx context.Context) {
 			addr = fmt.Sprintf("%s:%d", hostOverride, item.Spec.Port)
 		}
 		next[types.NamespacedName{Namespace: item.Namespace, Name: item.Name}] = Backend{
-			Namespace: item.Namespace,
-			Name:      item.Name,
-			Address:   addr,
-			Ready:     item.IsReady(),
+			Namespace:              item.Namespace,
+			Name:                   item.Name,
+			Address:                addr,
+			Ready:                  item.IsReady(),
+			AllowedServiceAccounts: slices.Clone(item.Spec.AllowedServiceAccounts),
+			PolicyObservedAt:       observedAt,
 		}
 	}
 

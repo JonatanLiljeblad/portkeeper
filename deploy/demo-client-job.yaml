@@ -9,7 +9,16 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      serviceAccountName: mcp-demo-client
       automountServiceAccountToken: false
+      volumes:
+        - name: gateway-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: portkeeper
+                  expirationSeconds: 600
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -20,8 +29,12 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - -endpoint=http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
-            - -agent-id=kind-demo
+            - -token-file=/var/run/portkeeper/token
             - -topic=gateway-routing
+          volumeMounts:
+            - name: gateway-token
+              mountPath: /var/run/portkeeper
+              readOnly: true
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

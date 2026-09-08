@@ -98,7 +98,13 @@ does not assert MCP application health.
 
 ### 4. Verified identity and per-server policy
 
-Status: pending.
+Status: complete.
+
+Authentication decision: audience-bound Kubernetes ServiceAccount bearer
+tokens, verified on every HTTP request using TokenReview. Per-server
+`allowedServiceAccounts` is deny-by-default; gateway and backend credentials
+are separate. See `docs/authentication.md` for the supported flow, upgrade
+behavior, bounded limiter semantics, and revocation/stream limitations.
 
 - Choose and document a supported authentication flow before implementation.
   Distinguish client-to-gateway identity from backend credentials.
@@ -112,6 +118,15 @@ Status: pending.
 Acceptance: one authenticated agent is allowed and another denied; spoofing
 `X-Agent-ID` does not bypass policy; direct backend access is blocked in the
 documented deployment.
+
+Delivered: per-request audience-checked TokenReview, verified identity for
+authorization/auditing/quotas, deny-by-default namespaced ServiceAccount
+allowlists, credential stripping, bounded limiter state, and fail-closed
+stale policy. `make e2e` uses checksum-pinned Calico and proves authenticated
+MCP calls, 401/403/spoofing and policy-revocation behavior, and direct
+Service/PodIP isolation with healthy-target controls in both namespaces.
+The captured run is in `docs/demo.txt`. This remains workload-token auth,
+not MCP OAuth; backend credentials and replica-shared quotas are not implemented.
 
 ### 5. Operational evidence and portfolio release
 

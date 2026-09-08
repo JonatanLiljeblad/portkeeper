@@ -1,0 +1,40 @@
+# namespaceSelector AND podSelector must remain in the same peer.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-backends-gateway-only
+  namespace: portkeeper-demo
+spec:
+  podSelector:
+    matchExpressions:
+      - key: mcp.portkeeper.dev/server
+        operator: Exists
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: portkeeper-system
+          podSelector:
+            matchLabels:
+              mcp.portkeeper.dev/gateway: "true"
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-backends-gateway-only
+  namespace: portkeeper-other
+spec:
+  podSelector:
+    matchExpressions:
+      - key: mcp.portkeeper.dev/server
+        operator: Exists
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: portkeeper-system
+          podSelector:
+            matchLabels:
+              mcp.portkeeper.dev/gateway: "true"

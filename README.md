@@ -48,6 +48,10 @@ through the in-cluster gateway. CI runs the same workflow.
 Readiness follows the current Deployment rollout, and namespaced routes
 isolate same-name backends. The demo also exercises updates, recovery,
 owned-resource recreation, and Kubernetes garbage collection.
+The gateway authenticates audience-bound Kubernetes ServiceAccount tokens
+and applies deny-by-default per-server policy. The kind workflow enforces
+backend NetworkPolicy with Calico and demonstrates direct-access denial. See
+[authentication and migration](docs/authentication.md).
 See [PLAN.md](./PLAN.md) for the checkpoint roadmap and acceptance criteria.
 
 ## Build and test
@@ -75,9 +79,12 @@ make e2e
 ```
 
 This builds four local images, creates an isolated kind cluster, installs the
-controller and gateway with their ServiceAccounts/RBAC, declares the runbook
+policy-enforcing CNI, controller and gateway with their ServiceAccounts/RBAC,
+declares the runbook
 backend, and runs a real MCP client Job. The client discovers `read_runbook`
-and retrieves a document over cluster DNS through the gateway Service.
+and retrieves a document over cluster DNS through the gateway Service using
+a projected ServiceAccount token. Denied identities, spoofed headers and
+direct-backend connection attempts are also exercised.
 
 The script uses its own kubeconfig and deletes only the cluster it created.
 Logs and a captured terminal walkthrough are left in
@@ -90,8 +97,12 @@ and a [captured successful run](docs/demo.txt).
 ### Real MCP endpoint
 
 Each backend serves Streamable HTTP at `/mcp`; clients address it through
-the gateway at `/<namespace>/<server-name>/mcp` and must send `X-Agent-ID` on every
-request. The gateway forwards the body, protocol/session headers, and
+the gateway at `/<namespace>/<server-name>/mcp` and must send
+`Authorization: Bearer <gateway-audience-ServiceAccount-token>` on every
+request. The server must allow the client in `spec.allowedServiceAccounts`.
+`X-Agent-ID` is ignored as identity and overwritten with the verified
+ServiceAccount username upstream; gateway credentials are stripped.
+The gateway forwards the body, protocol/session headers, and
 streamed responses rather than aggregating tools or terminating MCP.
 Legacy `/<server-name>/<endpoint>` routes work when the server name is unique
 across the cluster; ambiguous names return **409 Conflict** rather than
@@ -110,19 +121,24 @@ make run-runbook-server
 register the backend with Kubernetes or start a gateway. The integration
 test above starts both HTTP servers with an in-memory registry entry,
 connects an actual SDK client, discovers the tool, and reads both documents.
+These local tests stub TokenReview; the kind workflow uses the real API.
 
-Known but unready servers return **503** with `Retry-After: 5`; unknown
+For authenticated, authorized clients, known but unready servers return
+**503** with `Retry-After: 5`; unknown
 servers return **404**. A failed connection to a cached-ready backend returns
 **502**. Readiness uses current-generation conditions and Deployment
 availability with a TCP probe; it is not an application-level MCP health check.
 The registry polls every five seconds and retains its previous snapshot on
-API errors, so status changes are not instantaneous.
+API errors, so status changes are not instantaneous. Authorization fails
+closed after 15 seconds without a fresh policy snapshot. Missing or invalid
+tokens return **401**, policy denial **403**, and unavailable TokenReview **503**.
 
-Current limitations: agent IDs are self-reported; rate limits count HTTP requests, including
+Current limitations: rate limits count HTTP requests, including
 MCP control messages. Existing metrics use `tool="mcp"` for these requests
 and record long-lived streams only when they finish. Metrics and logs include
 the resolved namespace; unresolved legacy requests have an empty namespace.
-Authentication and protocol-aware observability remain roadmap work.
+Rate-limit state is capped at 10,000 identities per process; replicas do not
+share quotas. Protocol-aware observability remains roadmap work.
 
 ## Local development
 
@@ -144,6 +160,7 @@ kubectl apply -f config/crd/bases/
 go run ./cmd/controller
 
 # 4. Register a sample MCP server
+kubectl create serviceaccount mcp-demo-client
 kubectl apply -f config/samples/mcp_v1alpha1_mcpserver.yaml
 
 # 5. In another terminal, make the backend reachable from the host and
@@ -155,12 +172,21 @@ kubectl port-forward svc/demo-server-svc 9000:9000 &
 BACKEND_FORWARD_PID=$!
 GATEWAY_BACKEND_HOST=localhost go run ./cmd/gateway
 
-# 6. Call a tool through the gateway. X-Agent-ID identifies the calling
-#    agent (self-reported, not auth) and is required — the per-agent rate
-#    limiter and logs key off it.
-curl -X POST -H 'X-Agent-ID: demo-agent' -d 'hello portkeeper' \
+# 6. In another shell, issue a short-lived gateway token using your local
+#    cluster-admin kubeconfig. Keep it out of logs and source control.
+TOKEN_FILE="$(mktemp)"
+chmod 600 "$TOKEN_FILE"
+kubectl create token mcp-demo-client --audience=portkeeper --duration=10m \
+  > "$TOKEN_FILE"
+# curl reads the credential from stdin rather than a command-line argument.
+printf 'Authorization: Bearer %s\n' "$(tr -d '\n' < "$TOKEN_FILE")" |
+  curl -X POST -H @- -d 'hello portkeeper' \
   http://localhost:8080/demo-server/echo
 ```
+
+This host-run toy setup does not enforce backend network isolation. Use
+`make e2e` for the policy-enforcing deployment. Manually issued tokens expire;
+reissue the token when necessary and delete its file when finished.
 
 ### Metrics dashboard (Prometheus + Grafana)
 
@@ -181,8 +207,9 @@ kubectl port-forward svc/grafana 3000:3000
 
 # 3. Generate some traffic and watch the panels move
 while true; do
-  curl -s -X POST -H 'X-Agent-ID: demo-agent' -d hi \
-    http://localhost:8080/demo-server/echo > /dev/null
+  printf 'Authorization: Bearer %s\n' "$(tr -d '\n' < "$TOKEN_FILE")" |
+    curl -s -X POST -H @- -d hi \
+      http://localhost:8080/demo-server/echo > /dev/null
   sleep 1
 done
 ```
@@ -202,6 +229,9 @@ and delete the cluster:
 ```bash
 # Run this in the shell where BACKEND_FORWARD_PID was set above.
 kill "$BACKEND_FORWARD_PID"
+
+# Run in the shell where TOKEN_FILE was set.
+rm -f "$TOKEN_FILE"
 
 # Deletes the kind cluster and everything deployed in it, including the
 # demo server, Prometheus, and Grafana.

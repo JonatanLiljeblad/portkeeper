@@ -6,6 +6,9 @@ kind: MCPServer
 metadata:
   name: demo-server
 spec:
+  allowedServiceAccounts:
+    - namespace: default
+      name: mcp-demo-client
   # Built from hack/toy-mcp-server and loaded into kind:
   #   docker build -t toy-mcp-server:0.1 hack/toy-mcp-server
   #   kind load docker-image toy-mcp-server:0.1

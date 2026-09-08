@@ -16,7 +16,7 @@ rules:
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
-# The gateway only ever reads MCPServer objects — it never writes.
+# The gateway reads the registry and validates tokens; it cannot read Secrets.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -25,3 +25,6 @@ rules:
   - apiGroups: ["mcp.portkeeper.dev"]
     resources: ["mcpservers"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]

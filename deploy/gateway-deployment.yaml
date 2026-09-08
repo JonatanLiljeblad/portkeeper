@@ -16,6 +16,7 @@ spec:
     metadata:
       labels:
         app: mcp-gateway
+        mcp.portkeeper.dev/gateway: "true"
     spec:
       serviceAccountName: mcp-gateway
       securityContext:
@@ -26,6 +27,9 @@ spec:
         - name: gateway
           image: portkeeper/gateway:e2e
           imagePullPolicy: IfNotPresent
+          env:
+            - name: GATEWAY_AUTH_AUDIENCE
+              value: portkeeper
           ports:
             - containerPort: 8080
           readinessProbe:

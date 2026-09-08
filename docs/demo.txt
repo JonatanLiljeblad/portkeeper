@@ -4,8 +4,12 @@ customresourcedefinition.apiextensions.k8s.io/mcpservers.mcp.portkeeper.dev cond
 namespace/portkeeper-system created
 namespace/portkeeper-demo created
 namespace/portkeeper-other created
+networkpolicy.networking.k8s.io/mcp-backends-gateway-only created
+networkpolicy.networking.k8s.io/mcp-backends-gateway-only created
 clusterrole.rbac.authorization.k8s.io/portkeeper-controller-role created
 clusterrole.rbac.authorization.k8s.io/portkeeper-gateway-role created
+serviceaccount/mcp-demo-client created
+serviceaccount/mcp-denied-client created
 serviceaccount/portkeeper-controller created
 serviceaccount/mcp-gateway created
 clusterrolebinding.rbac.authorization.k8s.io/portkeeper-controller created
@@ -26,34 +30,43 @@ mcpserver.mcp.portkeeper.dev/runbooks   portkeeper/runbooks:e2e   Ready
 NAME                       READY   UP-TO-DATE   AVAILABLE   AGE
 deployment.apps/runbooks   1/1     1            1           2s
 
-NAME                   TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
-service/runbooks-svc   ClusterIP   10.96.243.202   <none>        9001/TCP   2s
-=== 3. Start the gateway and verify its read-only registry access ===
+NAME                   TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+service/runbooks-svc   ClusterIP   10.96.125.51   <none>        9001/TCP   2s
+=== 3. Start the gateway; verify registry and TokenReview RBAC ===
 deployment.apps/mcp-gateway created
 service/mcp-gateway created
 Waiting for deployment "mcp-gateway" rollout to finish: 0 of 1 updated replicas are available...
 deployment "mcp-gateway" successfully rolled out
+yes
 yes
 Gateway cannot create mcpservers.
 Gateway cannot get secrets.
 === 4. Run the SDK client inside Kubernetes through the gateway Service ===
 job.batch/mcp-demo-client created
 job.batch/mcp-demo-client condition met
-Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp as kind-demo
+Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
 Discovered tool: read_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
 Portkeeper removes the routing prefix and forwards to the backend's `/mcp`.
-Configure the client to send `X-Agent-ID` on every request. This header
-is an attribution label, not authenticated identity.
+Configure the client to send a Kubernetes ServiceAccount bearer token with
+audience `portkeeper` on every request. The gateway verifies it using
+TokenReview and requires that ServiceAccount in the server's
+`spec.allowedServiceAccounts`. `X-Agent-ID` cannot establish identity.
+
+A 401 means the token is missing, invalid, expired or has the wrong audience.
+A 403 means the verified account is not allowed for this server. Client
+credentials are stripped before proxying to the backend.
 
 For an unknown-server response, inspect `kubectl get mcpservers -A`.
 The gateway refreshes its registry every five seconds. The older
 `/<server-name>/mcp` URL works only when that name is unique across namespaces;
 an ambiguous legacy URL returns 409. Use the namespaced URL to select a server.
 
-A 503 means the latest observed MCPServer is not ready. Inspect
+A 503 can mean TokenReview is unavailable, authorization policy is older
+than 15 seconds, or the latest observed MCPServer is not ready. Check the
+response and gateway logs before investigating the backend. Inspect
 `kubectl describe mcpserver -n <namespace> <name>` for its Ready condition,
 then inspect the Deployment and pod logs. Readiness requires a completed
 current-generation rollout with an available replica and a passing TCP probe.
@@ -67,6 +80,38 @@ When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.
 
 MCP discovery and tool call completed.
+=== 4a. Authenticate tokens and authorize namespaced ServiceAccounts ===
+pod/denied-client created
+pod/denied-client condition met
+Observed HTTP 403 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+pod/missing-token created
+pod/missing-token condition met
+Observed HTTP 401 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+pod/invalid-token created
+pod/invalid-token condition met
+Observed HTTP 401 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+pod/wrong-audience created
+pod/wrong-audience condition met
+Observed HTTP 401 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+pod/spoofed-agent created
+pod/spoofed-agent condition met
+Observed HTTP 403 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+pod/denied-legacy created
+pod/denied-legacy condition met
+Observed HTTP 403 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp
+mcpserver.mcp.portkeeper.dev/runbooks patched
+pod/deny-by-default created
+pod/deny-by-default condition met
+Observed HTTP 403 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+pod/deny-by-default-legacy created
+pod/deny-by-default-legacy condition met
+Observed HTTP 403 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp
+mcpserver.mcp.portkeeper.dev/runbooks configured
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+pod/restored-allowlist created
+pod/restored-allowlist condition met
+Observed HTTP 400 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
 === 5. Isolate same-name backends in different namespaces ===
 mcpserver.mcp.portkeeper.dev/runbooks created
 mcpserver.mcp.portkeeper.dev/runbooks condition met
@@ -76,21 +121,29 @@ pod/other-ready condition met
 Observed HTTP 400 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-other/runbooks/mcp
 pod/other-client created
 pod/other-client condition met
-Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-other/runbooks/mcp as other-client
+Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-other/runbooks/mcp
 Discovered tool: read_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
 Portkeeper removes the routing prefix and forwards to the backend's `/mcp`.
-Configure the client to send `X-Agent-ID` on every request. This header
-is an attribution label, not authenticated identity.
+Configure the client to send a Kubernetes ServiceAccount bearer token with
+audience `portkeeper` on every request. The gateway verifies it using
+TokenReview and requires that ServiceAccount in the server's
+`spec.allowedServiceAccounts`. `X-Agent-ID` cannot establish identity.
+
+A 401 means the token is missing, invalid, expired or has the wrong audience.
+A 403 means the verified account is not allowed for this server. Client
+credentials are stripped before proxying to the backend.
 
 For an unknown-server response, inspect `kubectl get mcpservers -A`.
 The gateway refreshes its registry every five seconds. The older
 `/<server-name>/mcp` URL works only when that name is unique across namespaces;
 an ambiguous legacy URL returns 409. Use the namespaced URL to select a server.
 
-A 503 means the latest observed MCPServer is not ready. Inspect
+A 503 can mean TokenReview is unavailable, authorization policy is older
+than 15 seconds, or the latest observed MCPServer is not ready. Check the
+response and gateway logs before investigating the backend. Inspect
 `kubectl describe mcpserver -n <namespace> <name>` for its Ready condition,
 then inspect the Deployment and pod logs. Readiness requires a completed
 current-generation rollout with an available replica and a passing TCP probe.
@@ -104,12 +157,145 @@ When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.
 
 MCP discovery and tool call completed.
+pod/denied-other created
+pod/denied-other condition met
+Observed HTTP 403 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-other/runbooks/mcp
 pod/ambiguous-name created
 pod/ambiguous-name condition met
 Observed HTTP 409 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp
 pod/missing-server created
 pod/missing-server condition met
 Observed HTTP 404 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/missing/mcp
+pod/missing-token-legacy created
+pod/missing-token-legacy condition met
+Observed HTTP 401 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp
+=== 5a. Prove healthy Service/PodIP isolation in both backend namespaces ===
+deployment "runbooks" successfully rolled out
+pod/portkeeper-demo-service-before created
+pod/portkeeper-demo-service-before condition met
+Observed HTTP 400 at http://runbooks-svc.portkeeper-demo.svc.cluster.local:9001/mcp
+pod/portkeeper-demo-service-blocked created
+pod/portkeeper-demo-service-blocked condition met
+Network probe passed: DNS resolved; TCP blocked=true at http://runbooks-svc.portkeeper-demo.svc.cluster.local:9001/mcp
+pod/portkeeper-demo-service-after created
+pod/portkeeper-demo-service-after condition met
+Observed HTTP 400 at http://runbooks-svc.portkeeper-demo.svc.cluster.local:9001/mcp
+pod/portkeeper-demo-pod-before created
+pod/portkeeper-demo-pod-before condition met
+Observed HTTP 400 at http://192.168.87.6:9001/mcp
+pod/portkeeper-demo-pod-blocked created
+pod/portkeeper-demo-pod-blocked condition met
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.6:9001/mcp
+pod/portkeeper-demo-pod-after created
+pod/portkeeper-demo-pod-after condition met
+Observed HTTP 400 at http://192.168.87.6:9001/mcp
+pod/portkeeper-demo-label-only created
+pod/portkeeper-demo-label-only condition met
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.6:9001/mcp
+pod/portkeeper-demo-namespace-only created
+pod/portkeeper-demo-namespace-only condition met
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.6:9001/mcp
+pod/portkeeper-demo-gateway-allowed created
+pod/portkeeper-demo-gateway-allowed condition met
+Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+Discovered tool: read_runbook
+# Gateway routing
+
+A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
+Portkeeper removes the routing prefix and forwards to the backend's `/mcp`.
+Configure the client to send a Kubernetes ServiceAccount bearer token with
+audience `portkeeper` on every request. The gateway verifies it using
+TokenReview and requires that ServiceAccount in the server's
+`spec.allowedServiceAccounts`. `X-Agent-ID` cannot establish identity.
+
+A 401 means the token is missing, invalid, expired or has the wrong audience.
+A 403 means the verified account is not allowed for this server. Client
+credentials are stripped before proxying to the backend.
+
+For an unknown-server response, inspect `kubectl get mcpservers -A`.
+The gateway refreshes its registry every five seconds. The older
+`/<server-name>/mcp` URL works only when that name is unique across namespaces;
+an ambiguous legacy URL returns 409. Use the namespaced URL to select a server.
+
+A 503 can mean TokenReview is unavailable, authorization policy is older
+than 15 seconds, or the latest observed MCPServer is not ready. Check the
+response and gateway logs before investigating the backend. Inspect
+`kubectl describe mcpserver -n <namespace> <name>` for its Ready condition,
+then inspect the Deployment and pod logs. Readiness requires a completed
+current-generation rollout with an available replica and a passing TCP probe.
+It does not certify application-level MCP tool behavior.
+
+A 502 means the gateway could not reach a backend that its cache considered
+ready. Controller observation and gateway polling are asynchronous, so a
+recent failure can produce 502 before the registry reflects it as 503.
+
+When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
+and forward the backend Service's port to the same local port.
+
+MCP discovery and tool call completed.
+deployment "runbooks" successfully rolled out
+pod/portkeeper-other-service-before created
+pod/portkeeper-other-service-before condition met
+Observed HTTP 400 at http://runbooks-svc.portkeeper-other.svc.cluster.local:9001/mcp
+pod/portkeeper-other-service-blocked created
+pod/portkeeper-other-service-blocked condition met
+Network probe passed: DNS resolved; TCP blocked=true at http://runbooks-svc.portkeeper-other.svc.cluster.local:9001/mcp
+pod/portkeeper-other-service-after created
+pod/portkeeper-other-service-after condition met
+Observed HTTP 400 at http://runbooks-svc.portkeeper-other.svc.cluster.local:9001/mcp
+pod/portkeeper-other-pod-before created
+pod/portkeeper-other-pod-before condition met
+Observed HTTP 400 at http://192.168.87.18:9001/mcp
+pod/portkeeper-other-pod-blocked created
+pod/portkeeper-other-pod-blocked condition met
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.18:9001/mcp
+pod/portkeeper-other-pod-after created
+pod/portkeeper-other-pod-after condition met
+Observed HTTP 400 at http://192.168.87.18:9001/mcp
+pod/portkeeper-other-label-only created
+pod/portkeeper-other-label-only condition met
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.18:9001/mcp
+pod/portkeeper-other-namespace-only created
+pod/portkeeper-other-namespace-only condition met
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.18:9001/mcp
+pod/portkeeper-other-gateway-allowed created
+pod/portkeeper-other-gateway-allowed condition met
+Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-other/runbooks/mcp
+Discovered tool: read_runbook
+# Gateway routing
+
+A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
+Portkeeper removes the routing prefix and forwards to the backend's `/mcp`.
+Configure the client to send a Kubernetes ServiceAccount bearer token with
+audience `portkeeper` on every request. The gateway verifies it using
+TokenReview and requires that ServiceAccount in the server's
+`spec.allowedServiceAccounts`. `X-Agent-ID` cannot establish identity.
+
+A 401 means the token is missing, invalid, expired or has the wrong audience.
+A 403 means the verified account is not allowed for this server. Client
+credentials are stripped before proxying to the backend.
+
+For an unknown-server response, inspect `kubectl get mcpservers -A`.
+The gateway refreshes its registry every five seconds. The older
+`/<server-name>/mcp` URL works only when that name is unique across namespaces;
+an ambiguous legacy URL returns 409. Use the namespaced URL to select a server.
+
+A 503 can mean TokenReview is unavailable, authorization policy is older
+than 15 seconds, or the latest observed MCPServer is not ready. Check the
+response and gateway logs before investigating the backend. Inspect
+`kubectl describe mcpserver -n <namespace> <name>` for its Ready condition,
+then inspect the Deployment and pod logs. Readiness requires a completed
+current-generation rollout with an available replica and a passing TCP probe.
+It does not certify application-level MCP tool behavior.
+
+A 502 means the gateway could not reach a backend that its cache considered
+ready. Controller observation and gateway polling are asynchronous, so a
+recent failure can produce 502 before the registry reflects it as 503.
+
+When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
+and forward the backend Service's port to the same local port.
+
+MCP discovery and tool call completed.
 === 6. Reject stale readiness during image and port updates, then recover ===
 mcpserver.mcp.portkeeper.dev/runbooks patched
 mcpserver.mcp.portkeeper.dev/runbooks condition met
@@ -134,21 +320,29 @@ pod/recovered-route condition met
 Observed HTTP 400 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
 pod/recovered-client created
 pod/recovered-client condition met
-Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp as recovered-client
+Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
 Discovered tool: read_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
 Portkeeper removes the routing prefix and forwards to the backend's `/mcp`.
-Configure the client to send `X-Agent-ID` on every request. This header
-is an attribution label, not authenticated identity.
+Configure the client to send a Kubernetes ServiceAccount bearer token with
+audience `portkeeper` on every request. The gateway verifies it using
+TokenReview and requires that ServiceAccount in the server's
+`spec.allowedServiceAccounts`. `X-Agent-ID` cannot establish identity.
+
+A 401 means the token is missing, invalid, expired or has the wrong audience.
+A 403 means the verified account is not allowed for this server. Client
+credentials are stripped before proxying to the backend.
 
 For an unknown-server response, inspect `kubectl get mcpservers -A`.
 The gateway refreshes its registry every five seconds. The older
 `/<server-name>/mcp` URL works only when that name is unique across namespaces;
 an ambiguous legacy URL returns 409. Use the namespaced URL to select a server.
 
-A 503 means the latest observed MCPServer is not ready. Inspect
+A 503 can mean TokenReview is unavailable, authorization policy is older
+than 15 seconds, or the latest observed MCPServer is not ready. Check the
+response and gateway logs before investigating the backend. Inspect
 `kubectl describe mcpserver -n <namespace> <name>` for its Ready condition,
 then inspect the Deployment and pod logs. Readiness requires a completed
 current-generation rollout with an available replica and a passing TCP probe.
@@ -176,21 +370,29 @@ pod/recreated-route condition met
 Observed HTTP 400 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
 pod/recreated-client created
 pod/recreated-client condition met
-Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp as recreated-client
+Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
 Discovered tool: read_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
 Portkeeper removes the routing prefix and forwards to the backend's `/mcp`.
-Configure the client to send `X-Agent-ID` on every request. This header
-is an attribution label, not authenticated identity.
+Configure the client to send a Kubernetes ServiceAccount bearer token with
+audience `portkeeper` on every request. The gateway verifies it using
+TokenReview and requires that ServiceAccount in the server's
+`spec.allowedServiceAccounts`. `X-Agent-ID` cannot establish identity.
+
+A 401 means the token is missing, invalid, expired or has the wrong audience.
+A 403 means the verified account is not allowed for this server. Client
+credentials are stripped before proxying to the backend.
 
 For an unknown-server response, inspect `kubectl get mcpservers -A`.
 The gateway refreshes its registry every five seconds. The older
 `/<server-name>/mcp` URL works only when that name is unique across namespaces;
 an ambiguous legacy URL returns 409. Use the namespaced URL to select a server.
 
-A 503 means the latest observed MCPServer is not ready. Inspect
+A 503 can mean TokenReview is unavailable, authorization policy is older
+than 15 seconds, or the latest observed MCPServer is not ready. Check the
+response and gateway logs before investigating the backend. Inspect
 `kubectl describe mcpserver -n <namespace> <name>` for its Ready condition,
 then inspect the Deployment and pod logs. Readiness requires a completed
 current-generation rollout with an available replica and a passing TCP probe.
@@ -213,21 +415,29 @@ pod/legacy-unique condition met
 Observed HTTP 400 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp
 pod/legacy-client created
 pod/legacy-client condition met
-Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp as legacy-client
+Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp
 Discovered tool: read_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
 Portkeeper removes the routing prefix and forwards to the backend's `/mcp`.
-Configure the client to send `X-Agent-ID` on every request. This header
-is an attribution label, not authenticated identity.
+Configure the client to send a Kubernetes ServiceAccount bearer token with
+audience `portkeeper` on every request. The gateway verifies it using
+TokenReview and requires that ServiceAccount in the server's
+`spec.allowedServiceAccounts`. `X-Agent-ID` cannot establish identity.
+
+A 401 means the token is missing, invalid, expired or has the wrong audience.
+A 403 means the verified account is not allowed for this server. Client
+credentials are stripped before proxying to the backend.
 
 For an unknown-server response, inspect `kubectl get mcpservers -A`.
 The gateway refreshes its registry every five seconds. The older
 `/<server-name>/mcp` URL works only when that name is unique across namespaces;
 an ambiguous legacy URL returns 409. Use the namespaced URL to select a server.
 
-A 503 means the latest observed MCPServer is not ready. Inspect
+A 503 can mean TokenReview is unavailable, authorization policy is older
+than 15 seconds, or the latest observed MCPServer is not ready. Check the
+response and gateway logs before investigating the backend. Inspect
 `kubectl describe mcpserver -n <namespace> <name>` for its Ready condition,
 then inspect the Deployment and pod logs. Readiness requires a completed
 current-generation rollout with an available replica and a passing TCP probe.

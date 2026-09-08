@@ -12,21 +12,41 @@ type MCPServerSpec struct {
 	// Port is the port the MCP server listens on inside the container.
 	Port int32 `json:"port"`
 
-	// Tools lists the tool names this server exposes. Used by the gateway
-	// to route requests without having to query the server itself first.
+	// Tools is discovery metadata; HTTP routing resolves the server, not tools.
 	// +optional
 	Tools []string `json:"tools,omitempty"`
 
-	// AuthType describes how the gateway should authenticate to this
-	// server. v0.1 only supports "none" and "token".
+	// AllowedServiceAccounts authorizes verified client identities for all
+	// endpoints on this server. An empty list denies every client.
+	// +optional
+	// +kubebuilder:validation:MaxItems=128
+	// +listType=map
+	// +listMapKey=namespace
+	// +listMapKey=name
+	AllowedServiceAccounts []ServiceAccountReference `json:"allowedServiceAccounts,omitempty"`
+
+	// AuthType reserves the backend credential mechanism. Backend token
+	// injection is not implemented; this is not client authentication.
 	// +kubebuilder:validation:Enum=none;token
 	// +kubebuilder:default=none
 	AuthType string `json:"authType,omitempty"`
 
-	// AuthSecretRef optionally names a Secret containing credentials,
-	// required when AuthType is "token".
+	// AuthSecretRef reserves a backend credential Secret; it is not consumed.
 	// +optional
 	AuthSecretRef string `json:"authSecretRef,omitempty"`
+}
+
+// ServiceAccountReference identifies a client ServiceAccount in this cluster.
+type ServiceAccountReference struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Namespace string `json:"namespace"`
+
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	Name string `json:"name"`
 }
 
 // MCPServerStatus defines the observed state of an MCPServer.
