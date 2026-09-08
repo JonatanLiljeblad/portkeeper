@@ -190,7 +190,7 @@ func TestRouterRejectsInvalidRequests(t *testing.T) {
 }
 
 func TestRouterRateLimit(t *testing.T) {
-	// Unknown servers also consume the request budget before registry lookup.
+	// Unknown servers also consume the request budget before returning 404.
 	router := NewRouter(&Registry{}, NewAgentLimiter(0.001, 1), testAuthenticator(t))
 	for i, want := range []int{http.StatusNotFound, http.StatusTooManyRequests} {
 		req := httptest.NewRequest(http.MethodPost, "/missing/mcp", nil)

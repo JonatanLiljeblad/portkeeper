@@ -89,7 +89,11 @@ func TestMCPInteroperability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 1 || tools.Tools[0].Name != "read_runbook" {
+	names := make(map[string]bool)
+	for _, tool := range tools.Tools {
+		names[tool.Name] = true
+	}
+	if len(tools.Tools) != 2 || !names["read_runbook"] || !names["stream_runbook"] {
 		t.Fatalf("unexpected tools: %+v", tools.Tools)
 	}
 	for _, tt := range []struct {

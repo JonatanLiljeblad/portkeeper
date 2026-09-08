@@ -1,0 +1,35 @@
+measured_at=2026-09-08T18:50:08Z
+35b15e6cd4f870d9fec367acb94ec337e75f798f
+ .github/copilot-instructions.md                 |  27 +++--
+ .github/workflows/ci.yml                        |   4 +-
+ Makefile                                        |   5 +-
+ PLAN.md                                         |   7 +-
+ README.md                                       |  20 +++-
+ cmd/gateway/main.go                             |  10 ++
+ cmd/gateway/main_test.go                        |  28 +++--
+ deploy/grafana.yaml                             |  62 ++++++++---
+ deploy/prometheus.yaml                          |   9 +-
+ docs/architecture.md                            |  17 +--
+ docs/authentication.md                          |  16 ++-
+ docs/kubernetes-demo.md                         |  22 +++-
+ hack/e2e-kind.sh                                | 142 +++++++++++++++++++++++-
+ hack/mcp-client/main.go                         |  34 +++++-
+ hack/runbook-mcp-server/main.go                 |   5 +-
+ internal/controller/mcpserver_controller.go     |   7 +-
+ internal/democlient/client.go                   |   4 +-
+ internal/gateway/mcp_test.go                    |   6 +-
+ internal/gateway/metrics.go                     |  88 ++++++++++++---
+ internal/gateway/metrics_test.go                | 113 ++++++++++++++++++-
+ internal/gateway/router.go                      |  35 +++---
+ internal/gateway/router_test.go                 |   2 +-
+ internal/runbookmcp/runbooks/gateway-routing.md |   7 ++
+ internal/runbookmcp/runbooks/rate-limiting.md   |   5 +
+ internal/runbookmcp/server.go                   |  50 ++++++++-
+ 25 files changed, 631 insertions(+), 94 deletions(-)
+Darwin 25.6.0 arm64
+Apple M2
+17179869184
+8
+Docker 29.7.2; CPUs=8; memory_bytes=8319770624; architecture=aarch64
+kind_node=kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0; calico=v3.32.0
+Benchmark-only profile: per-agent RPS/burst=1000/1000; TokenReview client QPS/burst=1000/1000; max in-flight reviews=32

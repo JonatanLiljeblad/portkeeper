@@ -19,3 +19,8 @@ are evicted; active or depleted buckets cannot be reset by creating new IDs.
 Changing `X-Agent-ID` cannot change the authenticated identity or quota.
 TokenReview is required on every HTTP request; already-open streams are not
 terminated when the token expires.
+
+Rate-limit metric labels keep only 128 individual verified identities, then
+aggregate under `_overflow`; this does not change quota enforcement. The
+benchmark temporarily raises both request budgets and TokenReview client
+capacity. Do not confuse those measured-profile settings with normal defaults.

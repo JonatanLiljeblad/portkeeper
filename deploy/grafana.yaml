@@ -1,6 +1,6 @@
 # Minimal Grafana for local dev/demo — no persistence, anonymous access.
 # Provisioned via ConfigMaps: Prometheus datasource + one portkeeper
-# dashboard (call rate, latency quantiles, error rate). Not for production.
+# dashboard (HTTP traffic and instrumented backend executions). Not for production.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -53,40 +53,41 @@ data:
         {
           "id": 1,
           "type": "timeseries",
-          "title": "Tool call rate",
-          "description": "Proxied tool calls per second, split by server and tool.",
+          "title": "Gateway HTTP request rate",
+          "description": "Finished HTTP requests including MCP control messages, rejections and streams. Not tool executions.",
           "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
           "targets": [
             {
               "refId": "A",
-              "expr": "sum by (namespace, server, tool) (rate(mcp_gateway_tool_calls_total[1m]))",
-              "legendFormat": "{{namespace}} / {{server}} / {{tool}}"
+              "expr": "sum by (namespace, server, endpoint) (rate(mcp_gateway_http_requests_total[1m]))",
+              "legendFormat": "{{namespace}} / {{server}} / {{endpoint}}"
             }
           ]
         },
         {
           "id": 2,
           "type": "timeseries",
-          "title": "Tool call latency (p50 / p95 / p99)",
+          "title": "HTTP request lifetime (p50 / p95 / p99)",
+          "description": "Includes authentication and the entire lifetime of long-lived streams; not per-tool latency.",
           "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
           "targets": [
             {
               "refId": "A",
-              "expr": "histogram_quantile(0.50, sum by (le) (rate(mcp_gateway_tool_call_duration_seconds_bucket[5m])))",
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(mcp_gateway_http_request_duration_seconds_bucket[5m])))",
               "legendFormat": "p50"
             },
             {
               "refId": "B",
-              "expr": "histogram_quantile(0.95, sum by (le) (rate(mcp_gateway_tool_call_duration_seconds_bucket[5m])))",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(mcp_gateway_http_request_duration_seconds_bucket[5m])))",
               "legendFormat": "p95"
             },
             {
               "refId": "C",
-              "expr": "histogram_quantile(0.99, sum by (le) (rate(mcp_gateway_tool_call_duration_seconds_bucket[5m])))",
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(mcp_gateway_http_request_duration_seconds_bucket[5m])))",
               "legendFormat": "p99"
             }
           ]
@@ -94,8 +95,9 @@ data:
         {
           "id": 3,
           "type": "timeseries",
-          "title": "Error rate (non-2xx % of calls)",
-          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+          "title": "HTTP error/aborted request rate (%)",
+          "description": "Counts non-2xx responses or aborted streams, including streams that already sent HTTP 200.",
+          "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": {
             "defaults": { "unit": "percent", "min": 0, "max": 100 },
@@ -104,10 +106,38 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "100 * (sum(rate(mcp_gateway_tool_calls_total{status!~\"2..\"}[5m])) or vector(0)) / sum(rate(mcp_gateway_tool_calls_total[5m]))",
-              "legendFormat": "non-2xx %"
+              "expr": "100 * (sum(rate(mcp_gateway_http_requests_total{status!~\"2..\"}[5m]) or rate(mcp_gateway_http_requests_total{result=\"aborted\"}[5m])) or vector(0)) / sum(rate(mcp_gateway_http_requests_total[5m]))",
+              "legendFormat": "HTTP errors / aborted %"
             }
           ]
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Active gateway HTTP requests / streams",
+          "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "refId": "A", "expr": "sum(mcp_gateway_http_requests_in_flight)", "legendFormat": "active HTTP handlers" }]
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Backend MCP tool executions",
+          "description": "Instrumented backend handler executions only. Third-party servers must export their own execution metrics.",
+          "gridPos": { "h": 9, "w": 12, "x": 0, "y": 18 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+          "targets": [{ "refId": "A", "expr": "sum by (tool, outcome) (rate(mcp_backend_tool_invocations_total[1m]))", "legendFormat": "{{tool}} / {{outcome}}" }]
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Backend execution duration (p95)",
+          "description": "Handler execution time, excluding gateway authentication and network latency.",
+          "gridPos": { "h": 9, "w": 12, "x": 12, "y": 18 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+          "targets": [{ "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(mcp_backend_tool_duration_seconds_bucket[5m])))", "legendFormat": "{{tool}}" }]
         }
       ]
     }
@@ -133,6 +163,12 @@ spec:
           image: grafana/grafana:11.1.0
           ports:
             - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            periodSeconds: 2
+            initialDelaySeconds: 5
           env:
             # Demo-only: skip login entirely.
             - name: GF_AUTH_ANONYMOUS_ENABLED

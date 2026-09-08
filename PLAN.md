@@ -130,7 +130,13 @@ not MCP OAuth; backend credentials and replica-shared quotas are not implemented
 
 ### 5. Operational evidence and portfolio release
 
-Status: pending.
+Status: complete.
+
+Decision: retain a transparent gateway with explicit HTTP metrics; instrument
+actual tool-handler execution in the runbook backend. Publish an experimental
+`v0.1.0` release with measured, reproducible evidence, then perform a full
+project overview before moving beyond this roadmap. Pause after checkpoint 5;
+the overview starts only when explicitly resumed.
 
 - Compare direct-backend and gateway latency under a documented workload,
   including concurrency and streaming. Publish hardware, methodology, and
@@ -144,6 +150,18 @@ Status: pending.
 
 Acceptance: another developer can reproduce the measurements and failure
 demo, and each reliability or security claim points to concrete evidence.
+
+Delivered: explicit bounded HTTP transport metrics, instrumented backend
+tool executions, real progress streaming, a provisioned monitoring dashboard,
+and a controlled pod-loss/recovery scenario with conditions, logs, and metrics.
+`make benchmark` runs the authenticated direct/gateway workload in kind.
+`docs/results.md` publishes hardware/configuration, pooled results from 2,080
+successful measured invocations, raw reports, and failure evidence. The
+experimental `v0.1.0` release documents architecture decisions and limitations;
+these are not production availability or performance guarantees.
+
+Post-checkpoint status: paused before the separately requested full-project
+overview. Do not begin that overview or a new roadmap increment until resumed.
 
 ## Scope guardrails
 

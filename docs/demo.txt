@@ -28,10 +28,10 @@ NAME                                    IMAGE                     PHASE
 mcpserver.mcp.portkeeper.dev/runbooks   portkeeper/runbooks:e2e   Ready
 
 NAME                       READY   UP-TO-DATE   AVAILABLE   AGE
-deployment.apps/runbooks   1/1     1            1           2s
+deployment.apps/runbooks   1/1     1            1           1s
 
 NAME                   TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
-service/runbooks-svc   ClusterIP   10.96.125.51   <none>        9001/TCP   2s
+service/runbooks-svc   ClusterIP   10.96.89.119   <none>        9001/TCP   1s
 === 3. Start the gateway; verify registry and TokenReview RBAC ===
 deployment.apps/mcp-gateway created
 service/mcp-gateway created
@@ -46,6 +46,7 @@ job.batch/mcp-demo-client created
 job.batch/mcp-demo-client condition met
 Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
 Discovered tool: read_runbook
+Discovered tool: stream_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
@@ -76,11 +77,31 @@ A 502 means the gateway could not reach a backend that its cache considered
 ready. Controller observation and gateway polling are asynchronous, so a
 recent failure can produce 502 before the registry reflects it as 503.
 
+Use `mcp_gateway_http_requests_total` for transport errors and
+`mcp_gateway_http_requests_in_flight` for open requests/streams. A stream may
+abort after sending HTTP 200; its metric has `result="aborted"`. HTTP request
+lifetime is not tool-execution latency. Instrumented backend
+`mcp_backend_tool_invocations_total` counts actual handler executions, not
+initialization/discovery traffic; third-party backends need their own metrics.
+
 When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.
 
 MCP discovery and tool call completed.
-=== 4a. Authenticate tokens and authorize namespaced ServiceAccounts ===
+=== 4a. Separate HTTP telemetry from executed MCP tools ===
+configmap/grafana-dashboard-provider created
+configmap/grafana-dashboards created
+configmap/grafana-datasources created
+configmap/prometheus-config created
+service/grafana created
+service/prometheus created
+deployment.apps/grafana created
+deployment.apps/prometheus created
+Waiting for deployment "prometheus" rollout to finish: 0 of 1 updated replicas are available...
+deployment "prometheus" successfully rolled out
+deployment "grafana" successfully rolled out
+One executed read_runbook invocation is distinct from multiple MCP transport requests.
+=== 4b. Authenticate tokens and authorize namespaced ServiceAccounts ===
 pod/denied-client created
 pod/denied-client condition met
 Observed HTTP 403 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
@@ -123,6 +144,7 @@ pod/other-client created
 pod/other-client condition met
 Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-other/runbooks/mcp
 Discovered tool: read_runbook
+Discovered tool: stream_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
@@ -152,6 +174,13 @@ It does not certify application-level MCP tool behavior.
 A 502 means the gateway could not reach a backend that its cache considered
 ready. Controller observation and gateway polling are asynchronous, so a
 recent failure can produce 502 before the registry reflects it as 503.
+
+Use `mcp_gateway_http_requests_total` for transport errors and
+`mcp_gateway_http_requests_in_flight` for open requests/streams. A stream may
+abort after sending HTTP 200; its metric has `result="aborted"`. HTTP request
+lifetime is not tool-execution latency. Instrumented backend
+`mcp_backend_tool_invocations_total` counts actual handler executions, not
+initialization/discovery traffic; third-party backends need their own metrics.
 
 When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.
@@ -182,23 +211,24 @@ pod/portkeeper-demo-service-after condition met
 Observed HTTP 400 at http://runbooks-svc.portkeeper-demo.svc.cluster.local:9001/mcp
 pod/portkeeper-demo-pod-before created
 pod/portkeeper-demo-pod-before condition met
-Observed HTTP 400 at http://192.168.87.6:9001/mcp
+Observed HTTP 400 at http://192.168.246.134:9001/mcp
 pod/portkeeper-demo-pod-blocked created
 pod/portkeeper-demo-pod-blocked condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.6:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.246.134:9001/mcp
 pod/portkeeper-demo-pod-after created
 pod/portkeeper-demo-pod-after condition met
-Observed HTTP 400 at http://192.168.87.6:9001/mcp
+Observed HTTP 400 at http://192.168.246.134:9001/mcp
 pod/portkeeper-demo-label-only created
 pod/portkeeper-demo-label-only condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.6:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.246.134:9001/mcp
 pod/portkeeper-demo-namespace-only created
 pod/portkeeper-demo-namespace-only condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.6:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.246.134:9001/mcp
 pod/portkeeper-demo-gateway-allowed created
 pod/portkeeper-demo-gateway-allowed condition met
 Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
 Discovered tool: read_runbook
+Discovered tool: stream_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
@@ -228,6 +258,13 @@ It does not certify application-level MCP tool behavior.
 A 502 means the gateway could not reach a backend that its cache considered
 ready. Controller observation and gateway polling are asynchronous, so a
 recent failure can produce 502 before the registry reflects it as 503.
+
+Use `mcp_gateway_http_requests_total` for transport errors and
+`mcp_gateway_http_requests_in_flight` for open requests/streams. A stream may
+abort after sending HTTP 200; its metric has `result="aborted"`. HTTP request
+lifetime is not tool-execution latency. Instrumented backend
+`mcp_backend_tool_invocations_total` counts actual handler executions, not
+initialization/discovery traffic; third-party backends need their own metrics.
 
 When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.
@@ -245,23 +282,24 @@ pod/portkeeper-other-service-after condition met
 Observed HTTP 400 at http://runbooks-svc.portkeeper-other.svc.cluster.local:9001/mcp
 pod/portkeeper-other-pod-before created
 pod/portkeeper-other-pod-before condition met
-Observed HTTP 400 at http://192.168.87.18:9001/mcp
+Observed HTTP 400 at http://192.168.246.148:9001/mcp
 pod/portkeeper-other-pod-blocked created
 pod/portkeeper-other-pod-blocked condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.18:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.246.148:9001/mcp
 pod/portkeeper-other-pod-after created
 pod/portkeeper-other-pod-after condition met
-Observed HTTP 400 at http://192.168.87.18:9001/mcp
+Observed HTTP 400 at http://192.168.246.148:9001/mcp
 pod/portkeeper-other-label-only created
 pod/portkeeper-other-label-only condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.18:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.246.148:9001/mcp
 pod/portkeeper-other-namespace-only created
 pod/portkeeper-other-namespace-only condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.87.18:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.246.148:9001/mcp
 pod/portkeeper-other-gateway-allowed created
 pod/portkeeper-other-gateway-allowed condition met
 Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-other/runbooks/mcp
 Discovered tool: read_runbook
+Discovered tool: stream_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
@@ -291,6 +329,13 @@ It does not certify application-level MCP tool behavior.
 A 502 means the gateway could not reach a backend that its cache considered
 ready. Controller observation and gateway polling are asynchronous, so a
 recent failure can produce 502 before the registry reflects it as 503.
+
+Use `mcp_gateway_http_requests_total` for transport errors and
+`mcp_gateway_http_requests_in_flight` for open requests/streams. A stream may
+abort after sending HTTP 200; its metric has `result="aborted"`. HTTP request
+lifetime is not tool-execution latency. Instrumented backend
+`mcp_backend_tool_invocations_total` counts actual handler executions, not
+initialization/discovery traffic; third-party backends need their own metrics.
 
 When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.
@@ -322,6 +367,7 @@ pod/recovered-client created
 pod/recovered-client condition met
 Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
 Discovered tool: read_runbook
+Discovered tool: stream_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
@@ -352,10 +398,82 @@ A 502 means the gateway could not reach a backend that its cache considered
 ready. Controller observation and gateway polling are asynchronous, so a
 recent failure can produce 502 before the registry reflects it as 503.
 
+Use `mcp_gateway_http_requests_total` for transport errors and
+`mcp_gateway_http_requests_in_flight` for open requests/streams. A stream may
+abort after sending HTTP 200; its metric has `result="aborted"`. HTTP request
+lifetime is not tool-execution latency. Instrumented backend
+`mcp_backend_tool_invocations_total` counts actual handler executions, not
+initialization/discovery traffic; third-party backends need their own metrics.
+
 When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.
 
 MCP discovery and tool call completed.
+=== 6a. Delete a backend pod; capture downtime, conditions, metrics and recovery ===
+pod/pod-loss-client created
+pod/pod-loss-client condition met
+node/portkeeper-e2e-66197-control-plane cordoned
+pod "runbooks-8f45d4b8f-cg5fz" deleted from portkeeper-demo namespace
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+pod/pod-loss-client condition met
+Observed HTTP 503 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+node/portkeeper-e2e-66197-control-plane uncordoned
+Waiting for deployment "runbooks" rollout to finish: 0 of 1 updated replicas are available...
+deployment "runbooks" successfully rolled out
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+pod/pod-loss-route created
+pod/pod-loss-route condition met
+Observed HTTP 400 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+pod/pod-loss-recovered created
+pod/pod-loss-recovered condition met
+Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+Discovered tool: read_runbook
+Discovered tool: stream_runbook
+# Gateway routing
+
+A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
+Portkeeper removes the routing prefix and forwards to the backend's `/mcp`.
+Configure the client to send a Kubernetes ServiceAccount bearer token with
+audience `portkeeper` on every request. The gateway verifies it using
+TokenReview and requires that ServiceAccount in the server's
+`spec.allowedServiceAccounts`. `X-Agent-ID` cannot establish identity.
+
+A 401 means the token is missing, invalid, expired or has the wrong audience.
+A 403 means the verified account is not allowed for this server. Client
+credentials are stripped before proxying to the backend.
+
+For an unknown-server response, inspect `kubectl get mcpservers -A`.
+The gateway refreshes its registry every five seconds. The older
+`/<server-name>/mcp` URL works only when that name is unique across namespaces;
+an ambiguous legacy URL returns 409. Use the namespaced URL to select a server.
+
+A 503 can mean TokenReview is unavailable, authorization policy is older
+than 15 seconds, or the latest observed MCPServer is not ready. Check the
+response and gateway logs before investigating the backend. Inspect
+`kubectl describe mcpserver -n <namespace> <name>` for its Ready condition,
+then inspect the Deployment and pod logs. Readiness requires a completed
+current-generation rollout with an available replica and a passing TCP probe.
+It does not certify application-level MCP tool behavior.
+
+A 502 means the gateway could not reach a backend that its cache considered
+ready. Controller observation and gateway polling are asynchronous, so a
+recent failure can produce 502 before the registry reflects it as 503.
+
+Use `mcp_gateway_http_requests_total` for transport errors and
+`mcp_gateway_http_requests_in_flight` for open requests/streams. A stream may
+abort after sending HTTP 200; its metric has `result="aborted"`. HTTP request
+lifetime is not tool-execution latency. Instrumented backend
+`mcp_backend_tool_invocations_total` counts actual handler executions, not
+initialization/discovery traffic; third-party backends need their own metrics.
+
+When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
+and forward the backend Service's port to the same local port.
+
+MCP discovery and tool call completed.
+Pod loss produced Ready=False and HTTP 503; a replacement pod restored Ready=True and MCP execution.
+node/portkeeper-e2e-66197-control-plane already uncordoned
 === 7. Recreate owned resources and garbage-collect deleted servers ===
 deployment.apps "runbooks" deleted from portkeeper-demo namespace
 service "runbooks-svc" deleted from portkeeper-demo namespace
@@ -372,6 +490,7 @@ pod/recreated-client created
 pod/recreated-client condition met
 Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
 Discovered tool: read_runbook
+Discovered tool: stream_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
@@ -401,6 +520,13 @@ It does not certify application-level MCP tool behavior.
 A 502 means the gateway could not reach a backend that its cache considered
 ready. Controller observation and gateway polling are asynchronous, so a
 recent failure can produce 502 before the registry reflects it as 503.
+
+Use `mcp_gateway_http_requests_total` for transport errors and
+`mcp_gateway_http_requests_in_flight` for open requests/streams. A stream may
+abort after sending HTTP 200; its metric has `result="aborted"`. HTTP request
+lifetime is not tool-execution latency. Instrumented backend
+`mcp_backend_tool_invocations_total` counts actual handler executions, not
+initialization/discovery traffic; third-party backends need their own metrics.
 
 When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.
@@ -417,6 +543,7 @@ pod/legacy-client created
 pod/legacy-client condition met
 Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/runbooks/mcp
 Discovered tool: read_runbook
+Discovered tool: stream_runbook
 # Gateway routing
 
 A real MCP backend is reached at `/<namespace>/<server-name>/mcp`;
@@ -447,8 +574,38 @@ A 502 means the gateway could not reach a backend that its cache considered
 ready. Controller observation and gateway polling are asynchronous, so a
 recent failure can produce 502 before the registry reflects it as 503.
 
+Use `mcp_gateway_http_requests_total` for transport errors and
+`mcp_gateway_http_requests_in_flight` for open requests/streams. A stream may
+abort after sending HTTP 200; its metric has `result="aborted"`. HTTP request
+lifetime is not tool-execution latency. Instrumented backend
+`mcp_backend_tool_invocations_total` counts actual handler executions, not
+initialization/discovery traffic; third-party backends need their own metrics.
+
 When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.
 
 MCP discovery and tool call completed.
+=== 8. Measure direct and authenticated gateway MCP traffic ===
+deployment.apps/mcp-gateway env updated
+Waiting for deployment "mcp-gateway" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "mcp-gateway" rollout to finish: 1 old replicas are pending termination...
+deployment "mcp-gateway" successfully rolled out
+mcpserver.mcp.portkeeper.dev/runbooks patched
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+serviceaccount/mcp-benchmark-client created
+job.batch/mcp-benchmark created
+pod/benchmark-policy-ready created
+pod/benchmark-policy-ready condition met
+Observed HTTP 400 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+job.batch/mcp-benchmark patched
+job.batch/mcp-benchmark condition met
+Raw benchmark report and environment captured in /Users/jonatanliljeblad/repos/portkeeper/artifacts/e2e.Pi6487/logs.
+mcpserver.mcp.portkeeper.dev/runbooks configured
+deployment.apps/mcp-gateway env updated
+Waiting for deployment "mcp-gateway" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "mcp-gateway" rollout to finish: 1 old replicas are pending termination...
+deployment "mcp-gateway" successfully rolled out
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+mcpserver.mcp.portkeeper.dev/runbooks condition met
 === Kubernetes MCP workflow completed ===

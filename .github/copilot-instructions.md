@@ -28,7 +28,7 @@ TokenReview is uncached, audience-checked, bounded to 32 concurrent calls with
 a three-second deadline. Never trust `X-Agent-ID`: overwrite it with the
 verified username upstream and strip gateway Authorization/Proxy-Authorization.
 It strips the routing prefix before reverse proxying,
-and records a structured `tool_call` log plus Prometheus metrics for proxied
+and records a structured `gateway_request` log plus Prometheus metrics for proxied
 and rate-limited calls. Keep these routing, attribution, and metric-label
 semantics consistent when changing gateway behavior. `/metrics` is exposed on
 the gateway's HTTP server. The controller metrics server uses `:8081`; the
@@ -70,6 +70,9 @@ make test
 
 # Build images and exercise actual Kubernetes discovery/routing in kind.
 make e2e
+
+# Add direct/gateway MCP concurrency and streaming measurements to that workflow.
+make benchmark
 
 # Exercise an actual MCP SDK client through the gateway without Kubernetes.
 go test -race ./internal/gateway -run '^TestMCPInteroperability$' -count=1
@@ -132,20 +135,30 @@ Negative Service/PodIP probes must retain their exact-target healthy controls.
   primary MCP sample and client Job live in `portkeeper-demo`, with a
   same-name lifecycle sample in `portkeeper-other`. Keep
   `deploy/rbac.yaml` account namespaces aligned with these Deployments.
-- CI uses the same `make e2e` script and uploads only
+- CI runs `make benchmark` through the same e2e script and uploads only
   `artifacts/e2e.*/logs/`. Never include generated kubeconfigs in artifacts.
 - Keep `statusCapturingWriter.Unwrap`: the reverse proxy uses
   `http.ResponseController` to reach the underlying flush support for SSE.
   Do not buffer streams or introduce automatic tool-call retries.
-- MCP traffic currently uses `tool="mcp"` in existing metrics. Counts and
-  rate limits are per HTTP request, not per JSON-RPC tool invocation; session
-  streams are recorded when they finish.
+- Gateway `mcp_gateway_http_*` metrics count HTTP handlers, not MCP executions.
+  `endpoint` is mcp|other; `result` is complete|aborted, including failures
+  after HTTP200 headers. Open streams remain in the in-flight gauge.
+  Actual execution metrics are `mcp_backend_tool_*` in the instrumented backend.
+  Do not parse/buffer gateway JSON-RPC to infer execution.
 - Gateway metrics are registered globally in `internal/gateway/metrics.go` and
   are consumed by the Grafana dashboard in `deploy/grafana.yaml`. Preserve
-  `namespace`, `server`, `tool`, and `status` labels for tool-call counters, and `agent` for
-  rate-limit counters unless updating the dashboard and Prometheus queries too.
+  their label contracts unless updating the dashboard and queries too.
+  Retain cardinality caps: 256 resolved server pairs, fixed unresolved/
+  unauthenticated/overflow groups, 128 verified rate-limit agent labels,
+  finite endpoint/status/result labels; admissions do not recycle.
 - `deploy/prometheus.yaml` intentionally scrapes
   `host.docker.internal:8080` for host-run gateway development. If changing to
   an in-cluster gateway, point its scrape target at the gateway Service.
 - Monitoring manifests are demo-only: Grafana permits anonymous admin access
   and neither Prometheus nor Grafana has persistence.
+- `kubectl apply -k deploy/` installs in-cluster monitoring in portkeeper-system.
+  Its trusted Prometheus pod has the gateway-network label and can access
+  both metrics and MCP on backend port9001; ordinary clients remain isolated.
+- Benchmarks temporarily raise per-agent and TokenReview client QPS/burst
+  to1000/1000 and restore defaults afterward. Normal defaults remain5/10;
+  max32 simultaneous TokenReviews and3s deadline still apply.

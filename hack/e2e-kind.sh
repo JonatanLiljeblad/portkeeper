@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 root="$PWD"
 cluster="${E2E_CLUSTER_NAME:-portkeeper-e2e-$$}"
 keep="${KEEP_CLUSTER:-0}"
+benchmark="${RUN_BENCHMARK:-0}"
 node_image="kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0"
 calico_version="v3.32.0"
 calico_sha256="bccabc607685551db918f66da724893eca3e69a50c5a3e3077029b02dbab8d35"
@@ -15,6 +16,10 @@ if [[ ! "$cluster" =~ ^portkeeper-e2e(-[a-z0-9-]+)?$ ]]; then
 fi
 if [[ "$keep" != 0 && "$keep" != 1 ]]; then
   echo "KEEP_CLUSTER must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$benchmark" != 0 && "$benchmark" != 1 ]]; then
+  echo "RUN_BENCHMARK must be 0 or 1" >&2
   exit 1
 fi
 for tool in docker kind kubectl curl shasum; do
@@ -122,6 +127,10 @@ EOF
     if [[ -n "$token_arg" ]]; then printf '        - "%s"\n' "$token_arg"; fi
     for arg in "$@"; do printf '        - "%s"\n' "$arg"; done
   } | k apply -f -
+  if [[ "${CLIENT_START_ONLY:-0}" == 1 ]]; then
+    k wait -n "$namespace" --for=condition=Ready "pod/$pod" --timeout=60s
+    return
+  fi
   if ! k wait -n "$namespace" --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" --timeout=75s; then
     k logs -n "$namespace" "$pod" | tee "$log_dir/$pod.log" >&2
     return 1
@@ -133,6 +142,113 @@ probe() {
   run_client "$1" "$2" "-expect-status=$3"
 }
 
+gateway_metrics() {
+  k get --raw '/api/v1/namespaces/portkeeper-system/services/mcp-gateway:8080/proxy/metrics'
+}
+
+backend_metrics() {
+  k get --raw '/api/v1/namespaces/portkeeper-demo/services/runbooks-svc:9001/proxy/metrics'
+}
+
+wait_scrape() {
+  local job want response attempt
+  job="$1"
+  want="$2"
+  for attempt in {1..30}; do
+    response="$(k get --raw "/api/v1/namespaces/portkeeper-system/services/prometheus:9090/proxy/api/v1/query?query=up%7Bjob%3D%22$job%22%7D")"
+    if grep -Eq "\"value\":\\[[^]]*,\"$want\"\\]" <<<"$response"; then
+      printf '%s\n' "$response"
+      return
+    fi
+    sleep 1
+  done
+  echo "Prometheus never observed up=$want for $job: $response" >&2
+  return 1
+}
+
+failure_demo() (
+  local node old_pod
+  node="$(k get nodes -o 'jsonpath={.items[0].metadata.name}')"
+  old_pod="$(k get pod -n portkeeper-demo -l mcp.portkeeper.dev/server=runbooks -o 'jsonpath={.items[0].metadata.name}')"
+  k get -n portkeeper-demo mcpserver/runbooks -o yaml >"$log_dir/failure-before-status.yaml"
+  gateway_metrics >"$log_dir/failure-before-gateway.prom"
+  backend_metrics >"$log_dir/failure-before-backend.prom"
+  # Keep a client running before the scheduling pause so it can observe downtime.
+  CLIENT_START_ONLY=1 probe pod-loss-client /portkeeper-demo/runbooks/mcp 503
+  trap 'status=$?; if ! k uncordon "$node"; then exit 1; fi; exit "$status"' EXIT
+  k cordon "$node"
+  k delete pod -n portkeeper-demo "$old_pod" --wait=true --timeout=30s
+  wait_ready portkeeper-demo runbooks False
+  k wait -n portkeeper-demo --for=jsonpath='{.status.phase}'=Succeeded pod/pod-loss-client --timeout=30s
+  k logs -n portkeeper-demo pod/pod-loss-client | tee "$log_dir/failure-client.log"
+  k get -n portkeeper-demo mcpserver/runbooks -o yaml >"$log_dir/failure-unavailable-status.yaml"
+  k get -n portkeeper-demo pods -o wide >"$log_dir/failure-unavailable-pods.log"
+  gateway_metrics >"$log_dir/failure-unavailable-gateway.prom"
+  wait_scrape portkeeper-runbooks 0 >"$log_dir/failure-backend-down.json"
+  k uncordon "$node"
+  k rollout status -n portkeeper-demo deployment/runbooks --timeout=120s
+  wait_ready portkeeper-demo runbooks True
+  probe pod-loss-route /portkeeper-demo/runbooks/mcp 400
+  run_client pod-loss-recovered /portkeeper-demo/runbooks/mcp
+  wait_scrape portkeeper-runbooks 1 >"$log_dir/failure-backend-recovered.json"
+  k get -n portkeeper-demo mcpserver/runbooks -o yaml >"$log_dir/failure-recovered-status.yaml"
+  gateway_metrics >"$log_dir/failure-recovered-gateway.prom"
+  backend_metrics >"$log_dir/failure-recovered-backend.prom"
+  k logs -n portkeeper-system deployment/portkeeper-controller >"$log_dir/failure-controller.log"
+  k logs -n portkeeper-system deployment/mcp-gateway >"$log_dir/failure-gateway.log"
+  echo "Pod loss produced Ready=False and HTTP 503; a replacement pod restored Ready=True and MCP execution."
+)
+
+restore_benchmark() {
+  k apply -f config/samples/mcp_v1alpha1_runbooks.yaml &&
+    k set env -n portkeeper-system deployment/mcp-gateway \
+      GATEWAY_RATE_LIMIT_RPS- GATEWAY_RATE_LIMIT_BURST- \
+      GATEWAY_TOKEN_REVIEW_QPS- GATEWAY_TOKEN_REVIEW_BURST- &&
+    k rollout status -n portkeeper-system deployment/mcp-gateway --timeout=120s &&
+    wait_ready portkeeper-demo runbooks True
+}
+
+run_benchmark() (
+  {
+    date -u '+measured_at=%Y-%m-%dT%H:%M:%SZ'
+    git rev-parse HEAD
+    git diff --stat
+    uname -srm
+    if [[ "$(uname -s)" == Darwin ]]; then
+      sysctl -n machdep.cpu.brand_string hw.memsize hw.logicalcpu
+    else
+      grep -m1 'model name' /proc/cpuinfo
+      grep MemTotal /proc/meminfo
+    fi
+    docker info --format 'Docker {{.ServerVersion}}; CPUs={{.NCPU}}; memory_bytes={{.MemTotal}}; architecture={{.Architecture}}'
+    echo "kind_node=$node_image; calico=$calico_version"
+    echo 'Benchmark-only profile: per-agent RPS/burst=1000/1000; TokenReview client QPS/burst=1000/1000; max in-flight reviews=32'
+  } >"$log_dir/benchmark-environment.txt"
+  trap 'status=$?; if ! restore_benchmark; then echo "Failed to restore ordinary benchmark policy/limits" >&2; exit 1; fi; exit "$status"' EXIT
+  k set env -n portkeeper-system deployment/mcp-gateway \
+    GATEWAY_RATE_LIMIT_RPS=1000 GATEWAY_RATE_LIMIT_BURST=1000 \
+    GATEWAY_TOKEN_REVIEW_QPS=1000 GATEWAY_TOKEN_REVIEW_BURST=1000
+  k rollout status -n portkeeper-system deployment/mcp-gateway --timeout=120s
+  k patch -n portkeeper-demo mcpserver runbooks --type=json \
+    -p '[{"op":"add","path":"/spec/allowedServiceAccounts/-","value":{"namespace":"portkeeper-system","name":"mcp-benchmark-client"}}]'
+  wait_ready portkeeper-demo runbooks True
+  k apply -f deploy/benchmark-job.yaml
+  CLIENT_NAMESPACE=portkeeper-system CLIENT_SA=mcp-benchmark-client \
+    probe benchmark-policy-ready /portkeeper-demo/runbooks/mcp 400
+  k get -n portkeeper-system deployment/mcp-gateway -o yaml >"$log_dir/benchmark-gateway-deployment.yaml"
+  k get -n portkeeper-demo deployment/runbooks -o yaml >"$log_dir/benchmark-backend-deployment.yaml"
+  k patch -n portkeeper-system job/mcp-benchmark --type=merge -p '{"spec":{"suspend":false}}'
+  if ! k wait -n portkeeper-system --for=condition=complete job/mcp-benchmark --timeout=600s; then
+    k logs -n portkeeper-system job/mcp-benchmark >"$log_dir/benchmark.json" 2>&1
+    echo "Benchmark failed; see $log_dir/benchmark.json" >&2
+    return 1
+  fi
+  k logs -n portkeeper-system job/mcp-benchmark >"$log_dir/benchmark.json"
+  gateway_metrics >"$log_dir/benchmark-gateway.prom"
+  backend_metrics >"$log_dir/benchmark-backend.prom"
+  echo "Raw benchmark report and environment captured in $log_dir."
+)
+
 collect_logs() {
   k get pods -A -o wide >"$log_dir/pods.log" 2>&1 || echo "Could not collect pod status" >&2
   k get events -A --sort-by=.metadata.creationTimestamp >"$log_dir/events.log" 2>&1 || echo "Could not collect events" >&2
@@ -142,6 +258,7 @@ collect_logs() {
   k logs -n portkeeper-demo job/mcp-demo-client >"$log_dir/client.log" 2>&1 || echo "Demo client logs unavailable" >&2
   k logs -n kube-system daemonset/calico-node --all-containers --tail=150 >"$log_dir/calico.log" 2>&1 || echo "Calico logs unavailable" >&2
   k get networkpolicy -A >"$log_dir/network-policies.log" 2>&1 || echo "Network policies unavailable" >&2
+  k logs -n portkeeper-system deployment/prometheus --tail=100 >"$log_dir/prometheus.log" 2>&1 || echo "Prometheus logs unavailable" >&2
 }
 
 cleanup() {
@@ -248,7 +365,23 @@ demo() {
   grep -Fq '# Gateway routing' "$log_dir/client.log"
   grep -Fq 'MCP discovery and tool call completed.' "$log_dir/client.log"
 
-  echo "=== 4a. Authenticate tokens and authorize namespaced ServiceAccounts ==="
+  echo "=== 4a. Separate HTTP telemetry from executed MCP tools ==="
+  k apply -k deploy/
+  k rollout status -n portkeeper-system deployment/prometheus --timeout=180s
+  k rollout status -n portkeeper-system deployment/grafana --timeout=180s
+  wait_scrape portkeeper-gateway 1 >"$log_dir/gateway-scrape.json"
+  wait_scrape portkeeper-runbooks 1 >"$log_dir/backend-scrape.json"
+  gateway_metrics >"$log_dir/gateway-http.prom"
+  backend_metrics >"$log_dir/backend-tools.prom"
+  grep -q '^mcp_gateway_http_requests_total{' "$log_dir/gateway-http.prom"
+  grep -q '^mcp_backend_tool_invocations_total{' "$log_dir/backend-tools.prom"
+  grep -Eq '^mcp_backend_tool_invocations_total\{.*tool="read_runbook".*\} 1$' "$log_dir/backend-tools.prom"
+  awk '/^mcp_gateway_http_requests_total.*server="runbooks"/ { requests += $NF } END { exit !(requests > 1) }' "$log_dir/gateway-http.prom"
+  echo "One executed read_runbook invocation is distinct from multiple MCP transport requests."
+  k get --raw '/api/v1/namespaces/portkeeper-system/services/grafana:3000/proxy/api/dashboards/uid/portkeeper' >"$log_dir/dashboard.json"
+  grep -q mcp_backend_tool_invocations_total "$log_dir/dashboard.json"
+
+  echo "=== 4b. Authenticate tokens and authorize namespaced ServiceAccounts ==="
   CLIENT_SA=mcp-denied-client probe denied-client /portkeeper-demo/runbooks/mcp 403
   CLIENT_TOKEN_MODE=none probe missing-token /portkeeper-demo/runbooks/mcp 401
   CLIENT_TOKEN_MODE=invalid probe invalid-token /portkeeper-demo/runbooks/mcp 401
@@ -314,6 +447,9 @@ demo() {
   probe recovered-route /portkeeper-demo/runbooks/mcp 400
   run_client recovered-client /portkeeper-demo/runbooks/mcp
 
+  echo "=== 6a. Delete a backend pod; capture downtime, conditions, metrics and recovery ==="
+  failure_demo
+
   echo "=== 7. Recreate owned resources and garbage-collect deleted servers ==="
   old_deployment="$(k get -n portkeeper-demo deployment/runbooks -o 'jsonpath={.metadata.uid}')"
   old_service="$(k get -n portkeeper-demo service/runbooks-svc -o 'jsonpath={.metadata.uid}')"
@@ -331,6 +467,10 @@ demo() {
   probe deleted-route /portkeeper-other/runbooks/mcp 404
   probe legacy-unique /runbooks/mcp 400
   run_client legacy-client /runbooks/mcp
+  if [[ "$benchmark" == 1 ]]; then
+    echo "=== 8. Measure direct and authenticated gateway MCP traffic ==="
+    run_benchmark
+  fi
   echo "=== Kubernetes MCP workflow completed ==="
 }
 

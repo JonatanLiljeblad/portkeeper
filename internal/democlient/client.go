@@ -64,7 +64,9 @@ func Run(ctx context.Context, endpoint string, credentials Credentials, topic st
 		return errors.New("token file is required for an MCP workflow")
 	}
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "portkeeper-demo", Version: "0.1.0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "portkeeper-demo", Version: "0.1.0"}, &mcp.ClientOptions{
+		MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true},
+	})
 	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
 		Endpoint:             endpoint,
 		HTTPClient:           httpClient(credentials),

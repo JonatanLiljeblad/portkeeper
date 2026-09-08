@@ -32,7 +32,7 @@ jobs:
         run: go test ./...
 
   kind:
-    name: Authenticated Kubernetes MCP and network isolation
+    name: MCP lifecycle, isolation and operational evidence
     needs: go
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -54,7 +54,7 @@ jobs:
           curl -fsSLo kubectl.sha256 "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl.sha256"
           echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
           sudo install -m 0755 kubectl /usr/local/bin/kubectl
-      - run: make e2e
+      - run: make benchmark
       - name: Upload demo and diagnostics
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

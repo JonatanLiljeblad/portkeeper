@@ -77,7 +77,12 @@ func (r *MCPServerReconciler) updateStatus(ctx context.Context, m *mcpv1alpha1.M
 	if equality.Semantic.DeepEqual(before.Status, m.Status) {
 		return nil
 	}
-	return r.Status().Patch(ctx, m, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+	if err := r.Status().Patch(ctx, m, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+		return err
+	}
+	log.FromContext(ctx).Info("mcpserver_status", "namespace", m.Namespace, "server", m.Name,
+		"generation", m.Generation, "phase", phase, "ready", status, "reason", reason)
+	return nil
 }
 
 func deploymentReadiness(dep *appsv1.Deployment, changed bool) (string, metav1.ConditionStatus, string, string) {

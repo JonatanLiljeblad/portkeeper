@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jonatan/portkeeper/internal/runbookmcp"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -16,7 +18,8 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", runbookmcp.NewHandler())
+	mux.Handle("/mcp", runbookmcp.NewObservedHandler(prometheus.DefaultRegisterer))
+	mux.Handle("/metrics", promhttp.Handler())
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           http.NewCrossOriginProtection().Handler(mux),

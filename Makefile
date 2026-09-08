@@ -1,4 +1,4 @@
-.PHONY: tidy build test e2e manifests generate toy-image kind-up kind-down install-crds run-controller run-gateway run-runbook-server apply-sample monitoring-up grafana-forward
+.PHONY: tidy build test e2e benchmark manifests generate toy-image kind-up kind-down install-crds run-controller run-gateway run-runbook-server apply-sample monitoring-up grafana-forward
 
 CONTROLLER_GEN := go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5
 
@@ -13,6 +13,9 @@ test:
 
 e2e:
 	bash hack/e2e-kind.sh
+
+benchmark:
+	RUN_BENCHMARK=1 bash hack/e2e-kind.sh
 
 # Regenerate config/crd/bases from the Go types in api/v1alpha1.
 manifests:

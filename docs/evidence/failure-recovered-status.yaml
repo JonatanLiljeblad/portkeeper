@@ -1,0 +1,31 @@
+apiVersion: mcp.portkeeper.dev/v1alpha1
+kind: MCPServer
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"mcp.portkeeper.dev/v1alpha1","kind":"MCPServer","metadata":{"annotations":{},"name":"runbooks","namespace":"portkeeper-demo"},"spec":{"allowedServiceAccounts":[{"name":"mcp-demo-client","namespace":"portkeeper-demo"}],"authType":"none","image":"portkeeper/runbooks:e2e","port":9001,"tools":["read_runbook"]}}
+  creationTimestamp: "2026-09-08T18:46:45Z"
+  generation: 7
+  name: runbooks
+  namespace: portkeeper-demo
+  resourceVersion: "1978"
+  uid: ef14ca77-a643-4d02-8110-d207af2fd886
+spec:
+  allowedServiceAccounts:
+  - name: mcp-demo-client
+    namespace: portkeeper-demo
+  authType: none
+  image: portkeeper/runbooks:e2e
+  port: 9001
+  tools:
+  - read_runbook
+status:
+  conditions:
+  - lastTransitionTime: "2026-09-08T18:49:47Z"
+    message: The desired Deployment replicas are updated, ready, and available
+    observedGeneration: 7
+    reason: DeploymentAvailable
+    status: "True"
+    type: Ready
+  observedGeneration: 7
+  phase: Ready

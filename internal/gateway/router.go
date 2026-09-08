@@ -25,23 +25,23 @@ func NewRouter(reg *Registry, limiter *AgentLimiter, auth Authenticator) *Router
 
 func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
-
+	httpRequestsInFlight.Inc()
+	defer httpRequestsInFlight.Dec()
 	agentID := ""
+	namespace, serverName, toolName, ok := parsePath(req.URL.Path)
+	metricNamespace, metricServer, metricEndpoint := "", "_unauthenticated", "other"
+	completed := true
+	recorder := &statusCapturingWriter{ResponseWriter: w, status: http.StatusOK}
+	defer func() {
+		elapsed := time.Since(start)
+		log.Printf("gateway_request namespace=%q server=%q endpoint=%q agent=%q status=%d completed=%t latency=%s",
+			namespace, serverName, toolName, agentID, recorder.status, completed, elapsed)
+		recordRequest(metricNamespace, metricServer, metricEndpoint, recorder.status, completed, elapsed)
+	}()
 	authErr := ErrAuthenticationUnavailable
 	if rt.auth != nil {
 		agentID, authErr = rt.auth.Authenticate(req.Context(), req)
 	}
-
-	namespace, serverName, toolName, ok := parsePath(req.URL.Path)
-	recorder := &statusCapturingWriter{ResponseWriter: w, status: http.StatusOK}
-	defer func() {
-		elapsed := time.Since(start)
-		log.Printf("tool_call namespace=%q server=%q tool=%q agent=%q status=%d latency=%s",
-			namespace, serverName, toolName, agentID, recorder.status, elapsed)
-		if authErr == nil && agentID != "" {
-			recordCall(namespace, serverName, toolName, recorder.status, elapsed)
-		}
-	}()
 	if authErr != nil || agentID == "" {
 		if errors.Is(authErr, ErrUnauthenticated) {
 			recorder.Header().Set("WWW-Authenticate", `Bearer realm="portkeeper"`)
@@ -52,18 +52,24 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 		return
 	}
+	metricServer = "_unresolved"
+	metricEndpoint = observedEndpoint(toolName)
 	if !ok {
 		http.Error(recorder, "expected /<namespace>/<server>/<endpoint> or /<server>/<endpoint>", http.StatusBadRequest)
 		return
 	}
+	backend, err := rt.registry.Resolve(namespace, serverName)
+	if err == nil {
+		namespace = backend.Namespace
+		metricNamespace, metricServer = observedServer(backend)
+	}
 	if !rt.limiter.Allow(agentID) {
-		rateLimitedTotal.WithLabelValues(agentID).Inc()
+		recordRateLimit(agentID)
 		recorder.Header().Set("Retry-After", "1")
 		http.Error(recorder, "agent rate limit or limiter capacity exceeded", http.StatusTooManyRequests)
 		return
 	}
 
-	backend, err := rt.registry.Resolve(namespace, serverName)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, ErrServerNotFound) {
@@ -74,7 +80,6 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(recorder, err.Error(), status)
 		return
 	}
-	namespace = backend.Namespace
 	if time.Since(backend.PolicyObservedAt) > policyMaxAge {
 		recorder.Header().Set("Retry-After", "5")
 		http.Error(recorder, "authorization policy is stale", http.StatusServiceUnavailable)
@@ -108,7 +113,9 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	outReq.URL.Path = "/" + toolName
 	outReq.URL.RawPath = ""
 
+	completed = false
 	proxy.ServeHTTP(recorder, outReq)
+	completed = true
 }
 
 func parsePath(path string) (namespace, server, tool string, ok bool) {

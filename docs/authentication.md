@@ -21,6 +21,10 @@ audience, a nonempty user UID, and a valid
 signature, expiry and bound-object validity. The gateway does not cache
 successful reviews. API failures fail closed with HTTP 503; reviews have a
 three-second deadline and a maximum of 32 in flight per gateway process.
+The Kubernetes client's TokenReview QPS/burst defaults remain 5/10, now
+explicitly configurable using `GATEWAY_TOKEN_REVIEW_QPS` and
+`GATEWAY_TOKEN_REVIEW_BURST`. These are API-client capacity settings, not
+per-agent quotas; the benchmark documents its temporarily raised profile.
 This intentionally makes API availability and TokenReview throughput part of
 the request path, rather than introducing a revocation cache in this checkpoint.
 
@@ -125,10 +129,10 @@ not a global quota or a shared rate-limit service.
 | 503 | TokenReview unavailable/overloaded, stale policy, or authorized backend unready |
 | 502 | Connection to an authorized, cached-ready backend failed |
 
-`tool_call` logs use the verified principal, or an empty agent for
-authentication failures; tokens are never logged. Existing tool-call metrics
-cover authenticated routed and rejected requests, not unauthenticated
-attempts. Rate-limit counters retain the `agent` label, now containing the
-verified username. Protocol-aware tool metrics and a broader cardinality
-policy remain checkpoint 5 work. `/readyz` and `/metrics` remain
+`gateway_request` logs use the verified principal, or an empty agent for
+authentication failures; tokens are never logged. Explicit HTTP metrics
+also count unauthenticated attempts under a fixed aggregate label.
+Rate-limit counters retain the `agent` label with bounded verified identities
+and an overflow aggregate. Actual tool executions are measured in the backend;
+see the [observability contract](observability.md). `/readyz` and `/metrics` remain
 unauthenticated operational endpoints; keep them on a trusted network.

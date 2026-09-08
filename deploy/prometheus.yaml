@@ -5,8 +5,7 @@
 # not in the cluster, so Prometheus scrapes `host.docker.internal:8080`.
 # Docker Desktop resolves that name to the host from inside containers, and
 # kind pods inherit it via CoreDNS -> node resolv.conf -> Docker's DNS.
-# If you later deploy the gateway in-cluster (deploy/gateway-deployment.yaml),
-# switch the target to the gateway Service instead.
+# For in-cluster gateway and backend targets, use `kubectl apply -k deploy/`.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -46,6 +45,12 @@ spec:
             - --storage.tsdb.retention.time=2h
           ports:
             - containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            periodSeconds: 2
+            initialDelaySeconds: 5
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus

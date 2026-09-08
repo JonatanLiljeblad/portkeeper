@@ -28,5 +28,12 @@ A 502 means the gateway could not reach a backend that its cache considered
 ready. Controller observation and gateway polling are asynchronous, so a
 recent failure can produce 502 before the registry reflects it as 503.
 
+Use `mcp_gateway_http_requests_total` for transport errors and
+`mcp_gateway_http_requests_in_flight` for open requests/streams. A stream may
+abort after sending HTTP 200; its metric has `result="aborted"`. HTTP request
+lifetime is not tool-execution latency. Instrumented backend
+`mcp_backend_tool_invocations_total` counts actual handler executions, not
+initialization/discovery traffic; third-party backends need their own metrics.
+
 When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.

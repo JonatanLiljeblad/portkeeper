@@ -2,6 +2,10 @@
 
 ![A Kubernetes-native gateway and registry for MCP (Model Context Protocol) servers.](./assets/banner.png)
 
+**Experimental v0.1.0:** a reproducible single-replica MCP control-plane and
+gateway demo, not a production-ready or highly available deployment.
+[Release and evidence](https://github.com/JonatanLiljeblad/portkeeper/releases/tag/v0.1.0).
+
 ## Why this exists
 
 Teams running multiple MCP servers today have no shared way to discover them,
@@ -15,8 +19,8 @@ for containers.
   up the live registry via the Kubernetes API and routes each request to the
   right backend.
 - **Observability**: proxied HTTP requests are logged and exported as
-  Prometheus metrics. For MCP endpoints these are transport-request metrics,
-  not individual tool-call metrics.
+  Prometheus metrics, separately from actual tool executions measured by the
+  instrumented runbook backend. Third-party backends need their own tool metrics.
 
 See [PLAN.md](./PLAN.md) for the full design rationale and roadmap, and
 [docs/architecture.md](./docs/architecture.md) for how the pieces fit
@@ -52,6 +56,10 @@ The gateway authenticates audience-bound Kubernetes ServiceAccount tokens
 and applies deny-by-default per-server policy. The kind workflow enforces
 backend NetworkPolicy with Calico and demonstrates direct-access denial. See
 [authentication and migration](docs/authentication.md).
+Operational behavior and boundaries are documented in
+[observability](docs/observability.md) and [architecture decisions](docs/decisions.md).
+See [measured latency and failure/recovery evidence](docs/results.md) for the
+experimental v0.1.0 workload, hardware, raw results, and limitations.
 See [PLAN.md](./PLAN.md) for the checkpoint roadmap and acceptance criteria.
 
 ## Build and test
@@ -76,6 +84,9 @@ With Docker running, kind v0.33.0, and kubectl v1.35 or v1.36 installed:
 
 ```bash
 make e2e
+
+# Same cluster workflow, plus direct-vs-gateway concurrency/streaming measurements.
+make benchmark
 ```
 
 This builds four local images, creates an isolated kind cluster, installs the
@@ -109,7 +120,8 @@ across the cluster; ambiguous names return **409 Conflict** rather than
 selecting an arbitrary backend. Namespaced toy routes also work.
 
 The read-only demo backend embeds two operational runbooks and exposes
-`read_runbook` with the topics `gateway-routing` and `rate-limiting`. It
+`read_runbook` and a progress-streaming `stream_runbook`, with the topics
+`gateway-routing` and `rate-limiting`. It
 cannot read arbitrary files or execute commands. To run the backend alone:
 
 ```bash
@@ -134,11 +146,12 @@ closed after 15 seconds without a fresh policy snapshot. Missing or invalid
 tokens return **401**, policy denial **403**, and unavailable TokenReview **503**.
 
 Current limitations: rate limits count HTTP requests, including
-MCP control messages. Existing metrics use `tool="mcp"` for these requests
+MCP control messages. HTTP metrics use `endpoint="mcp"` for these requests
 and record long-lived streams only when they finish. Metrics and logs include
 the resolved namespace; unresolved legacy requests have an empty namespace.
 Rate-limit state is capped at 10,000 identities per process; replicas do not
-share quotas. Protocol-aware observability remains roadmap work.
+share quotas. Actual tool-execution metrics come from the instrumented backend,
+not gateway traffic inspection. See [metric names and cardinality limits](docs/observability.md).
 
 ## Local development
 

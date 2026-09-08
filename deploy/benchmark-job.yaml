@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-benchmark-client
+  namespace: portkeeper-system
+automountServiceAccountToken: false
+---
+# Trusted benchmark actor: allowed to reach the same backend directly for a
+# baseline, but deliberately NOT selected by the gateway Service.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mcp-benchmark
+  namespace: portkeeper-system
+spec:
+  suspend: true
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: mcp-benchmark
+        mcp.portkeeper.dev/gateway: "true"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: mcp-benchmark-client
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: gateway-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: portkeeper
+                  expirationSeconds: 600
+      containers:
+        - name: benchmark
+          image: portkeeper/demo-client:e2e
+          imagePullPolicy: IfNotPresent
+          args:
+            - -benchmark
+            - -direct-endpoint=http://runbooks-svc.portkeeper-demo.svc.cluster.local:9001/mcp
+            - -endpoint=http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+            - -token-file=/var/run/portkeeper/token
+            - -concurrency=1,4,8
+            - -calls-per-worker=20
+            - -warmup=3
+            - -timeout=9m
+          volumeMounts:
+            - name: gateway-token
+              mountPath: /var/run/portkeeper
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

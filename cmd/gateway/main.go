@@ -36,6 +36,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("loading authentication kube config: %v", err)
 	}
+	cfg.QPS = envFloat32("GATEWAY_TOKEN_REVIEW_QPS", 5)
+	cfg.Burst = envInt("GATEWAY_TOKEN_REVIEW_BURST", 10)
 	reviews, err := authenticationv1.NewForConfig(cfg)
 	if err != nil {
 		log.Fatalf("creating authentication client: %v", err)
@@ -70,6 +72,14 @@ func main() {
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("gateway server error: %v", err)
 	}
+}
+
+func envFloat32(name string, def float64) float32 {
+	v := envFloat(name, def)
+	if v > math.MaxFloat32 || float32(v) == 0 {
+		log.Fatalf("%s must fit in a positive float32", name)
+	}
+	return float32(v)
 }
 
 func envFloat(name string, def float64) float64 {

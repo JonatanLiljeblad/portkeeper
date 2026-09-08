@@ -1,0 +1,1 @@
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"runbooks-svc.portkeeper-demo.svc.cluster.local:9001","job":"portkeeper-runbooks","namespace":"portkeeper-demo","server":"runbooks"},"value":[1788893385.809,"0"]}]}}

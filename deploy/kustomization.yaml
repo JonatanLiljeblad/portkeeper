@@ -1,0 +1,43 @@
+# Optional in-cluster monitoring. The standalone YAMLs retain host-run defaults.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: portkeeper-system
+resources:
+  - prometheus.yaml
+  - grafana.yaml
+patches:
+  - target:
+      kind: Deployment
+      name: prometheus
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: prometheus
+      spec:
+        template:
+          metadata:
+            labels:
+              mcp.portkeeper.dev/gateway: "true"
+  - target:
+      kind: ConfigMap
+      name: prometheus-config
+    patch: |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: prometheus-config
+      data:
+        prometheus.yml: |
+          global:
+            scrape_interval: 5s
+          scrape_configs:
+            - job_name: portkeeper-gateway
+              static_configs:
+                - targets: ["mcp-gateway.portkeeper-system.svc.cluster.local:8080"]
+            - job_name: portkeeper-runbooks
+              static_configs:
+                - targets: ["runbooks-svc.portkeeper-demo.svc.cluster.local:9001"]
+                  labels:
+                    namespace: portkeeper-demo
+                    server: runbooks

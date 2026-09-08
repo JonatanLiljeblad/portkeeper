@@ -56,11 +56,12 @@
    exposes `Unwrap` so the reverse proxy can flush SSE responses.
    Gateway credentials are stripped and `X-Agent-ID` is overwritten with
    the verified username before proxying.
-6. The gateway logs and measures completed HTTP requests. Existing metric
-   names say "tool calls", but MCP requests use the route label `tool="mcp"`;
-   they do not yet identify the tool inside a JSON-RPC message. A `namespace`
-   label distinguishes same-name backends; unresolved legacy requests leave
-   it empty.
+6. The gateway logs and measures HTTP handlers using explicit HTTP metric
+   names and `endpoint="mcp"`. In-flight requests include open streams;
+   completed and aborted responses are distinct. Backend instrumentation
+   counts actual tool executions without teaching the gateway JSON-RPC.
+   Namespace/server labels are bounded, and unresolved routes aggregate
+   without reflecting arbitrary client-supplied names.
 
 ## Reconciliation and readiness
 
@@ -111,8 +112,10 @@ choose sessionless backends or an appropriate session-routing strategy.
 
 The [identity and policy decision](authentication.md) describes TokenReview,
 per-server authorization, credential separation, bounded replica-local
-limiting, and the enforced backend network-isolation demo. Protocol-aware
-metrics remain roadmap work. This is not an OAuth authorization server.
+limiting, and the enforced backend network-isolation demo. See
+[observability](observability.md) for separate transport/execution metrics
+and [decisions](decisions.md) for the release scope. This is not an OAuth
+authorization server.
 
 ## Why the controller and gateway are separate binaries
 

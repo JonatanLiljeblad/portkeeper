@@ -18,6 +18,9 @@ The root module and build image use Go 1.25.
 
 ```bash
 make e2e
+
+# Add measured direct-vs-gateway, concurrent and streaming MCP workloads.
+make benchmark
 ```
 
 The script builds non-root controller, gateway, runbook-server, and SDK-client
@@ -66,10 +69,18 @@ The captured walkthrough shows these stages:
 6. Change the first server to a missing image, then an unreachable port.
    Observe `Ready=False` and 503, restore each change, and call the recovered
    backend.
+   It also holds replacement scheduling briefly while deleting a real backend
+   pod, observes HTTP 503 and `Ready=False`, records metrics and conditions,
+   then permits replacement and completes a new MCP call.
 7. Delete the managed Deployment and Service, confirm replacement UIDs,
    and call the recreated backend. Delete the second CR with foreground
    propagation and observe its children being garbage-collected. Its
    namespaced URL becomes 404; the remaining unique legacy URL works again.
+8. With `make benchmark`, temporarily use the documented higher request/API
+   budgets, authorize a trusted benchmark client for a direct baseline, and
+   measure real MCP calls at concurrency 1, 4, and 8 including streamed
+   progress. Capture raw JSON, hardware/runtime configuration and scrape
+   snapshots, then restore ordinary gateway limits and server policy.
 
 The client Job uses `serviceAccountName: mcp-demo-client` with
 `automountServiceAccountToken: false`. Its explicitly projected token has
@@ -97,8 +108,17 @@ without the gateway label, are both blocked. These controls prevent an
 unready/nonexistent backend or broken DNS from producing a false success.
 
 Each run captures its current transcript under `artifacts/e2e.*/logs/demo.txt`.
-The [captured successful run](demo.txt) includes checkpoint 4 authentication,
-authorization, enforced network isolation, and the existing lifecycle workflow.
+The [captured successful run](demo.txt) includes authentication, authorization,
+enforced network isolation, operational telemetry, pod loss/recovery, and the
+benchmark. [Published results](results.md) include raw reports and diagnostics.
+
+The workflow now also installs in-cluster Prometheus/Grafana using
+`kubectl apply -k deploy/`, confirms gateway/backend scrape health and the
+provisioned dashboard, and captures separate HTTP and actual tool-execution
+metrics. [Observability](observability.md) explains labels, stream/session
+semantics, and the controlled pod-failure scenario.
+See [benchmark methodology](benchmark-methodology.md) for sample definitions
+and why benchmark limits differ from normal defaults.
 
 ## Authentication and authorization contract
 
@@ -208,7 +228,8 @@ and `demo.txt`.
 On failure, the script prints the diagnostic location and the latest client
 output/events before removing its cluster, unless `KEEP_CLUSTER=1` is set.
 
-The GitHub Actions workflow runs Go checks before the same `make e2e` command
+The GitHub Actions workflow runs Go checks before `make benchmark`, a superset
+of the same `make e2e` workflow,
 on Linux/amd64. It installs pinned kind/kubectl versions with checksum
 verification and uploads only the logs directory, never kubeconfigs or
 token files. The e2e script separately verifies the pinned Calico manifest.
