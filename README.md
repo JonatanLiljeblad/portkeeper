@@ -2,6 +2,8 @@
 
 A Kubernetes-native gateway and registry for MCP (Model Context Protocol) servers.
 
+![PortKeeper Banner](./assets/banner.png)
+
 ## Why this exists
 
 Teams running multiple MCP servers today have no shared way to discover them,
