@@ -14,14 +14,13 @@ import (
 // proxies it there. Namespaced routes are "/<namespace>/<server>/<endpoint>";
 // legacy "/<server>/<endpoint>" routes require a cluster-unique server name.
 type Router struct {
-	registry  *Registry
-	limiter   *AgentLimiter
-	auth      Authenticator
-	transport http.RoundTripper
+	registry *Registry
+	limiter  *AgentLimiter
+	auth     Authenticator
 }
 
 func NewRouter(reg *Registry, limiter *AgentLimiter, auth Authenticator) *Router {
-	return &Router{registry: reg, limiter: limiter, auth: auth, transport: diagnosticTransport()}
+	return &Router{registry: reg, limiter: limiter, auth: auth}
 }
 
 func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -96,8 +95,18 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if req.ProtoMajor == 1 && req.Body != nil && req.Body != http.NoBody {
+		// An early SSE flush must not drain/close the inbound body while the
+		// upstream transport is still finishing its request-body EOF check.
+		if err := http.NewResponseController(recorder).EnableFullDuplex(); err != nil {
+			log.Printf("gateway_full_duplex_unavailable: %v", err)
+			http.Error(recorder, "streaming request transport unavailable", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	target := &url.URL{Scheme: "http", Host: backend.Address}
-	proxy := &httputil.ReverseProxy{Transport: rt.transport, Rewrite: func(r *httputil.ProxyRequest) {
+	proxy := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
 		r.SetURL(target)
 		r.Out.Host = r.In.Host
 		r.SetXForwarded()
@@ -149,8 +158,7 @@ func (w *statusCapturingWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// Unwrap lets http.ResponseController reach the underlying Flush support,
-// which the reverse proxy needs to deliver SSE without buffering.
+// Unwrap preserves both flushing and full-duplex control for streaming requests.
 func (w *statusCapturingWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }

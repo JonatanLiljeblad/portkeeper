@@ -203,7 +203,7 @@ restore_benchmark() {
   k apply -f config/samples/mcp_v1alpha1_runbooks.yaml &&
     k set env -n portkeeper-system deployment/mcp-gateway \
       GATEWAY_RATE_LIMIT_RPS- GATEWAY_RATE_LIMIT_BURST- \
-      GATEWAY_TOKEN_REVIEW_QPS- GATEWAY_TOKEN_REVIEW_BURST- GATEWAY_DEBUG_TRANSPORT- &&
+      GATEWAY_TOKEN_REVIEW_QPS- GATEWAY_TOKEN_REVIEW_BURST- &&
     k rollout status -n portkeeper-system deployment/mcp-gateway --timeout=120s &&
     wait_ready portkeeper-demo runbooks True
 }
@@ -255,7 +255,7 @@ run_benchmark() (
   trap 'status=$?; capture_benchmark_diagnostics; if ! restore_benchmark; then echo "Failed to restore ordinary benchmark policy/limits" >&2; exit 1; fi; exit "$status"' EXIT
   k set env -n portkeeper-system deployment/mcp-gateway \
     GATEWAY_RATE_LIMIT_RPS=1000 GATEWAY_RATE_LIMIT_BURST=1000 \
-    GATEWAY_TOKEN_REVIEW_QPS=1000 GATEWAY_TOKEN_REVIEW_BURST=1000 GATEWAY_DEBUG_TRANSPORT=1
+    GATEWAY_TOKEN_REVIEW_QPS=1000 GATEWAY_TOKEN_REVIEW_BURST=1000
   k rollout status -n portkeeper-system deployment/mcp-gateway --timeout=120s
   k patch -n portkeeper-demo mcpserver runbooks --type=json \
     -p '[{"op":"add","path":"/spec/allowedServiceAccounts/-","value":{"namespace":"portkeeper-system","name":"mcp-benchmark-client"}}]'

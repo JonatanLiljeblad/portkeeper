@@ -22,7 +22,6 @@ import (
 )
 
 func TestMCPBenchmarkThroughGateway(t *testing.T) {
-	t.Setenv("GATEWAY_DEBUG_TRANSPORT", "1")
 	backend := httptest.NewServer(runbookmcp.NewHandler())
 	defer backend.Close()
 	reg := &Registry{backends: map[types.NamespacedName]Backend{

@@ -53,7 +53,11 @@
 5. The backend handles MCP initialization, discovery, and tool execution.
    The gateway forwards protocol headers, bodies, responses, and cancellation
    without owning sessions or interpreting tool calls. Its response wrapper
-   exposes `Unwrap` so the reverse proxy can flush SSE responses.
+   exposes `Unwrap` so the reverse proxy can flush SSE responses and enable
+   full-duplex HTTP/1 request handling. Without full duplex, an early response
+   flush can close the inbound body while the upstream transport is still
+   checking its EOF, aborting an otherwise healthy stream. HTTP/2 already
+   supports concurrent request reads and response writes.
    Gateway credentials are stripped and `X-Agent-ID` is overwritten with
    the verified username before proxying.
 6. The gateway logs and measures HTTP handlers using explicit HTTP metric
