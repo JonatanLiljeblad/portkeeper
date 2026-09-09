@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,8 +16,33 @@ import (
 	"time"
 
 	"github.com/jonatan/portkeeper/internal/runbookmcp"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestBenchmarkErrorCategories(t *testing.T) {
+	rpcErr := &jsonrpc.Error{Code: -32001, Message: "private detail"}
+	for _, tt := range []struct {
+		name   string
+		err    error
+		status int
+		want   string
+	}{
+		{"eof", fmt.Errorf("read stream: %w", io.EOF), 200, "eof"},
+		{"unexpected eof", fmt.Errorf("read stream: %w", io.ErrUnexpectedEOF), 200, "unexpected_eof"},
+		{"jsonrpc", fmt.Errorf("call tool: %w", rpcErr), 200, "jsonrpc_error"},
+		{"http precedence", rpcErr, 403, "http_403"},
+		{"deadline precedence", context.DeadlineExceeded, 503, "deadline"},
+		{"cancellation", context.Canceled, 200, "cancelled"},
+		{"unknown", errors.New("private detail"), 200, "protocol_or_transport"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := benchmarkError(t.Context(), tt.err, tt.status); got != tt.want {
+				t.Fatalf("category = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestBenchmarkAggregation(t *testing.T) {
 	values := make([]float64, 100)
@@ -240,6 +266,70 @@ func TestBenchmarkReportsRejectedCalls(t *testing.T) {
 		if m.Target == "gateway" && (m.Attempts != 1 || m.Errors != 1 || m.Successes != 0 ||
 			m.ErrorCategories["http_429"] != 1 || m.WarmupErrors["http_429"] != 1) {
 			t.Fatalf("rejection accounting incorrect: %+v", m)
+		}
+	}
+}
+
+func TestBenchmarkReportsJSONRPCCodeWithoutDetails(t *testing.T) {
+	handler := runbookmcp.NewHandler()
+	rpcHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+				http.Error(w, "read request", http.StatusBadRequest)
+				return
+			}
+			r.Body.Close()
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var request struct {
+				Method string          `json:"method"`
+				ID     json.RawMessage `json:"id"`
+			}
+			if err := json.Unmarshal(body, &request); err != nil {
+				t.Error(err)
+				http.Error(w, "parse request", http.StatusBadRequest)
+				return
+			}
+			if request.Method == "tools/call" {
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(map[string]any{
+					"jsonrpc": "2.0", "id": request.ID,
+					"error": &jsonrpc.Error{
+						Code: -32001, Message: "private-message",
+						Data: json.RawMessage(`{"secret":"private-data"}`),
+					},
+				}); err != nil {
+					t.Error(err)
+				}
+				return
+			}
+		}
+		handler.ServeHTTP(w, r)
+	})
+	direct := httptest.NewServer(rpcHandler)
+	defer direct.Close()
+	gateway := httptest.NewServer(rpcHandler)
+	defer gateway.Close()
+	config := smallBenchmarkConfig(direct.URL, gateway.URL, tokenFile(t, "secret"))
+	config.WarmupPerWorker = 0
+	var output bytes.Buffer
+	if err := Benchmark(t.Context(), config, &output); !errors.Is(err, ErrBenchmarkFailed) {
+		t.Fatalf("error = %v, want ErrBenchmarkFailed", err)
+	}
+	report := decodeBenchmark(t, &output)
+	for _, measurement := range report.Measurements {
+		if measurement.Errors != 1 || len(measurement.Samples) != 1 {
+			t.Fatalf("missing failed sample: %+v", measurement)
+		}
+		sample := measurement.Samples[0]
+		if sample.ErrorCategory != "jsonrpc_error" || sample.JSONRPCErrorCode == nil || *sample.JSONRPCErrorCode != -32001 {
+			t.Fatalf("missing structured error code: %+v", sample)
+		}
+	}
+	for _, private := range []string{"private-message", "private-data"} {
+		if strings.Contains(output.String(), private) {
+			t.Fatalf("report includes %s", private)
 		}
 	}
 }
