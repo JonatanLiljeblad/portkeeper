@@ -14,13 +14,14 @@ import (
 // proxies it there. Namespaced routes are "/<namespace>/<server>/<endpoint>";
 // legacy "/<server>/<endpoint>" routes require a cluster-unique server name.
 type Router struct {
-	registry *Registry
-	limiter  *AgentLimiter
-	auth     Authenticator
+	registry  *Registry
+	limiter   *AgentLimiter
+	auth      Authenticator
+	transport http.RoundTripper
 }
 
 func NewRouter(reg *Registry, limiter *AgentLimiter, auth Authenticator) *Router {
-	return &Router{registry: reg, limiter: limiter, auth: auth}
+	return &Router{registry: reg, limiter: limiter, auth: auth, transport: diagnosticTransport()}
 }
 
 func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -96,7 +97,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	target := &url.URL{Scheme: "http", Host: backend.Address}
-	proxy := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+	proxy := &httputil.ReverseProxy{Transport: rt.transport, Rewrite: func(r *httputil.ProxyRequest) {
 		r.SetURL(target)
 		r.Out.Host = r.In.Host
 		r.SetXForwarded()
