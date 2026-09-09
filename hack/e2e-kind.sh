@@ -384,6 +384,8 @@ demo() {
   done
 
   echo "=== 4. Run the SDK client inside Kubernetes through the gateway Service ==="
+  # Deployment readiness can precede Service dataplane convergence.
+  probe initial-route-ready /portkeeper-demo/runbooks/mcp 400
   k apply -f deploy/demo-client-job.yaml
   k wait -n portkeeper-demo --for=condition=complete job/mcp-demo-client --timeout=90s
   k logs -n portkeeper-demo job/mcp-demo-client | tee "$log_dir/client.log"
