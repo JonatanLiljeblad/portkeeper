@@ -109,6 +109,10 @@ return an error before a report exists. The CLI exits nonzero after emitting the
 report if any initialization, warm-up, tool call, stream validation, or close
 failed, or if the deadline prevented planned calls. It does not print tokens,
 credential paths, endpoint URLs, or raw upstream/SDK error strings in the report.
+Once a failure report has been written, the CLI exits nonzero without a
+redundant stderr message, so container log collection cannot splice that
+message into the JSON. Configuration and report-write failures still report
+their errors on stderr.
 
 Top-level fields:
 
@@ -130,6 +134,8 @@ and one-based `repetition`, and reports:
   `first_progress_latency_seconds`, covering only successful validated streams;
 - raw `samples`, with zero-based `worker` and `call`, `duration_seconds`,
   optional `first_progress_seconds`, `progress_updates`, and `error_category`.
+  Structured JSON-RPC failures also include a numeric `jsonrpc_error_code`,
+  never the upstream message or data.
   Samples are grouped by worker, then call, not by completion order.
 
 Each latency summary contains `samples`, `p50`, `p95`, and `p99`. All duration
@@ -157,7 +163,8 @@ client scheduling stalls.
 Other finite categories include `http_401`, `http_403`, `http_429`, `http_5xx`,
 `http_other`, `deadline`, `cancelled`, `transport_timeout`, `transport`,
 `protocol_or_transport`, `missing_tool`, `tool_error`, `input_required`, and
-`invalid_content`. Raw error messages are intentionally not reported. HTTP
+`invalid_content`, plus `eof`, `unexpected_eof`, and `jsonrpc_error` where
+the underlying error is available. Raw error messages are intentionally not reported. HTTP
 DELETE 405 is permitted by MCP and is not treated as a close failure; other
 rejected close responses are errors. Calls never started after cancellation are
 visible as `attempts < planned_calls`, not fabricated error samples.

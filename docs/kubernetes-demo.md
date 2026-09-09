@@ -227,6 +227,10 @@ events, pod status, controller, gateway, backend, Calico, policies, client,
 and `demo.txt`.
 On failure, the script prints the diagnostic location and the latest client
 output/events before removing its cluster, unless `KEEP_CLUSTER=1` is set.
+Benchmark Job failures are detected without waiting for the success timeout.
+Its JSON report is retained, and `benchmark-gateway.log` plus gateway/backend
+metric snapshots are captured before ordinary limits are restored and the
+benchmark gateway pod is replaced.
 
 The GitHub Actions workflow runs Go checks before `make benchmark`, a superset
 of the same `make e2e` workflow,

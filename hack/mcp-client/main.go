@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -69,6 +70,11 @@ func main() {
 		err = democlient.Run(ctx, *endpoint, credentials, *topic, os.Stdout)
 	}
 	if err != nil {
+		if errors.Is(err, democlient.ErrBenchmarkFailed) {
+			// Container log collectors merge stdout/stderr without preserving
+			// ordering. Do not interrupt the already-written JSON failure report.
+			os.Exit(1)
+		}
 		log.Fatal(err)
 	}
 }

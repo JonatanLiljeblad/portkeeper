@@ -208,6 +208,34 @@ restore_benchmark() {
     wait_ready portkeeper-demo runbooks True
 }
 
+wait_for_benchmark() {
+  local deadline conditions
+  deadline=$((SECONDS + 600))
+  while (( SECONDS < deadline )); do
+    conditions="$(k get -n portkeeper-system job/mcp-benchmark \
+      -o 'jsonpath={range .status.conditions[*]}{.type}={.status}{"\n"}{end}')" || return 1
+    if grep -Eq '^(Failed|FailureTarget)=True$' <<<"$conditions"; then
+      echo "Benchmark Job failed." >&2
+      return 1
+    fi
+    if grep -Fxq 'Complete=True' <<<"$conditions"; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Timed out waiting for benchmark Job." >&2
+  return 1
+}
+
+capture_benchmark_diagnostics() {
+  k logs -n portkeeper-system deployment/mcp-gateway >"$log_dir/benchmark-gateway.log" 2>&1 ||
+    echo "Benchmark gateway logs unavailable" >&2
+  gateway_metrics >"$log_dir/benchmark-gateway.prom" ||
+    echo "Benchmark gateway metrics unavailable" >&2
+  backend_metrics >"$log_dir/benchmark-backend.prom" ||
+    echo "Benchmark backend metrics unavailable" >&2
+}
+
 run_benchmark() (
   {
     date -u '+measured_at=%Y-%m-%dT%H:%M:%SZ'
@@ -224,7 +252,7 @@ run_benchmark() (
     echo "kind_node=$node_image; calico=$calico_version"
     echo 'Benchmark-only profile: per-agent RPS/burst=1000/1000; TokenReview client QPS/burst=1000/1000; max in-flight reviews=32'
   } >"$log_dir/benchmark-environment.txt"
-  trap 'status=$?; if ! restore_benchmark; then echo "Failed to restore ordinary benchmark policy/limits" >&2; exit 1; fi; exit "$status"' EXIT
+  trap 'status=$?; capture_benchmark_diagnostics; if ! restore_benchmark; then echo "Failed to restore ordinary benchmark policy/limits" >&2; exit 1; fi; exit "$status"' EXIT
   k set env -n portkeeper-system deployment/mcp-gateway \
     GATEWAY_RATE_LIMIT_RPS=1000 GATEWAY_RATE_LIMIT_BURST=1000 \
     GATEWAY_TOKEN_REVIEW_QPS=1000 GATEWAY_TOKEN_REVIEW_BURST=1000
@@ -238,14 +266,12 @@ run_benchmark() (
   k get -n portkeeper-system deployment/mcp-gateway -o yaml >"$log_dir/benchmark-gateway-deployment.yaml"
   k get -n portkeeper-demo deployment/runbooks -o yaml >"$log_dir/benchmark-backend-deployment.yaml"
   k patch -n portkeeper-system job/mcp-benchmark --type=merge -p '{"spec":{"suspend":false}}'
-  if ! k wait -n portkeeper-system --for=condition=complete job/mcp-benchmark --timeout=600s; then
-    k logs -n portkeeper-system job/mcp-benchmark >"$log_dir/benchmark.json" 2>&1
+  if ! wait_for_benchmark; then
+    k logs -n portkeeper-system job/mcp-benchmark >"$log_dir/benchmark.json"
     echo "Benchmark failed; see $log_dir/benchmark.json" >&2
     return 1
   fi
   k logs -n portkeeper-system job/mcp-benchmark >"$log_dir/benchmark.json"
-  gateway_metrics >"$log_dir/benchmark-gateway.prom"
-  backend_metrics >"$log_dir/benchmark-backend.prom"
   echo "Raw benchmark report and environment captured in $log_dir."
 )
 

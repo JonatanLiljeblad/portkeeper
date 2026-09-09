@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jonatan/portkeeper/internal/runbookmcp"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -46,6 +47,7 @@ type BenchmarkSample struct {
 	FirstProgressSeconds float64 `json:"first_progress_seconds,omitempty"`
 	ProgressUpdates      int     `json:"progress_updates,omitempty"`
 	ErrorCategory        string  `json:"error_category,omitempty"`
+	JSONRPCErrorCode     *int64  `json:"jsonrpc_error_code,omitempty"`
 }
 
 type BenchmarkMeasurement struct {
@@ -91,6 +93,9 @@ type BenchmarkReport struct {
 	Measurements  []BenchmarkMeasurement `json:"measurements"`
 	Overhead      []BenchmarkOverhead    `json:"overhead,omitempty"`
 }
+
+// ErrBenchmarkFailed means a complete JSON failure report was already written.
+var ErrBenchmarkFailed = errors.New("benchmark failed; see sanitized error categories in JSON report")
 
 func normalizeBenchmark(c BenchmarkConfig) (BenchmarkConfig, error) {
 	if err := validateTarget(c.DirectEndpoint); err != nil {
@@ -182,7 +187,7 @@ phases:
 		return fmt.Errorf("write benchmark report: %w", err)
 	}
 	if !report.Successful {
-		return errors.New("benchmark failed; see sanitized error categories in JSON report")
+		return ErrBenchmarkFailed
 	}
 	return nil
 }
@@ -392,6 +397,11 @@ func (w *benchmarkWorker) call(ctx context.Context, tool, topic string, worker, 
 	switch {
 	case err != nil:
 		sample.ErrorCategory = benchmarkError(ctx, err, int(w.transport.status.Load()))
+		var rpcErr *jsonrpc.Error
+		if errors.As(err, &rpcErr) {
+			code := rpcErr.Code
+			sample.JSONRPCErrorCode = &code
+		}
 	case result == nil:
 		sample.ErrorCategory = "invalid_content"
 	case result.IsError:
@@ -436,6 +446,14 @@ func benchmarkError(ctx context.Context, err error, status int) string {
 		return "http_5xx"
 	case status >= 300:
 		return "http_other"
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return "unexpected_eof"
+	case errors.Is(err, io.EOF):
+		return "eof"
+	}
+	var rpcErr *jsonrpc.Error
+	if errors.As(err, &rpcErr) {
+		return "jsonrpc_error"
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {

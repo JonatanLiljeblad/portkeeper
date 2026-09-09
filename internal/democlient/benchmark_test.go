@@ -280,7 +280,13 @@ func TestBenchmarkRejectsMissingOrBufferedStreaming(t *testing.T) {
 			report := decodeBenchmark(t, &output)
 			want := map[string]string{"missing": "stream_missing_progress", "late": "stream_late_progress", "tool_error": "tool_error"}[mode]
 			for _, m := range report.Measurements {
-				if (m.Tool == runbookmcp.StreamTool || mode == "tool_error") && m.ErrorCategories[want] != 1 {
+				rejected := m.ErrorCategories[want]
+				if mode == "late" {
+					// When progress and the result arrive together, the SDK may
+					// return before all notification callbacks finish.
+					rejected += m.ErrorCategories["stream_missing_progress"]
+				}
+				if (m.Tool == runbookmcp.StreamTool || mode == "tool_error") && rejected != 1 {
 					t.Fatalf("unexpected stream failure: %+v", m)
 				}
 			}
