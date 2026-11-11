@@ -55,6 +55,7 @@ func main() {
 
 	limiter := gateway.NewAgentLimiter(rps, burst)
 	router := gateway.NewRouter(reg, limiter, auth)
+	router.MaxMCPRequestBytes = int64(envInt("GATEWAY_MCP_MAX_REQUEST_BYTES", int(gateway.DefaultMaxMCPRequestBytes)))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {

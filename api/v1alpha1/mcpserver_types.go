@@ -16,8 +16,9 @@ type MCPServerSpec struct {
 	// +optional
 	Tools []string `json:"tools,omitempty"`
 
-	// AllowedServiceAccounts authorizes verified client identities for all
-	// endpoints on this server. An empty list denies every client.
+	// AllowedServiceAccounts authorizes verified client identities for this
+	// server. An empty list denies every client. Each entry may narrow its
+	// account to specific MCP tools.
 	// +optional
 	// +kubebuilder:validation:MaxItems=128
 	// +listType=map
@@ -47,6 +48,19 @@ type ServiceAccountReference struct {
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	Name string `json:"name"`
+
+	// AllowedTools restricts which MCP tools this account may call through
+	// the server's /mcp endpoint. When omitted, the account may call every
+	// tool and use every endpoint. When set, tools/call for any other tool is
+	// denied and only the /mcp endpoint is reachable. Tool discovery
+	// (tools/list) and non-tool MCP methods are not filtered.
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=128
+	AllowedTools []string `json:"allowedTools,omitempty"`
 }
 
 // MCPServerStatus defines the observed state of an MCPServer.

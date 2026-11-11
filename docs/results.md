@@ -123,3 +123,27 @@ The [observability contract](observability.md) defines metric names,
 cardinality limits, aborted-stream accounting and session behavior. The
 [architecture decisions](decisions.md) and [authentication boundary](authentication.md)
 describe what this release does and deliberately does not guarantee.
+
+## Per-tool policy evidence (after v0.1.0)
+
+Captured from one `make e2e` run on 2026-11-11, step 4c. It is not part of
+the v0.1.0 measurements above and has not been benchmarked.
+
+The account `mcp-readonly-client` is allowed only `read_runbook`. The
+gateway's [audit trail](evidence/tool-audit.jsonl) for the run holds three
+events: one allowed read by the unrestricted demo client, then for the
+restricted client one `allow` (`tool_listed`) for `read_runbook` and one
+`deny` (`tool_not_listed`) for `stream_runbook`.
+
+The [gateway decision counters](evidence/tool-decisions-gateway.prom) agree:
+two allowed `read_runbook` decisions and one denied `stream_runbook`. The
+[backend execution counters](evidence/tool-decisions-backend.prom) taken
+immediately afterwards show two `read_runbook` executions and no
+`stream_runbook` series at all, so the denied call was not executed. The
+client reported the denial as JSON-RPC error `-32090` and then listed tools
+on the same session; see step 4c of the [captured run](demo.txt).
+
+The parser micro-benchmark (`go test ./internal/gateway -run '^$' -bench
+InspectMCP -benchmem`) measured about 4 µs and 43 allocations per typical
+`tools/call` body on the Apple M2 above. That is the parsing cost only, not
+an end-to-end latency comparison.

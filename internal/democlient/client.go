@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -57,11 +58,46 @@ func httpClient(credentials Credentials) *http.Client {
 // Run discovers and calls the read-only runbook tool through an MCP endpoint.
 // It makes one tool call, without application-level retries.
 func Run(ctx context.Context, endpoint string, credentials Credentials, topic string, output io.Writer) (err error) {
-	if err := validateTarget(endpoint); err != nil {
+	session, err := connect(ctx, endpoint, credentials)
+	if err != nil {
 		return err
 	}
+	defer func() { err = errors.Join(err, session.Close()) }()
+
+	return readRunbook(ctx, session, endpoint, topic, output)
+}
+
+// codeToolNotPermitted mirrors the gateway's JSON-RPC denial code.
+const codeToolNotPermitted = -32090
+
+// ExpectToolDenied calls one tool and succeeds only if the gateway refuses it
+// by policy and the same session can still discover tools afterwards.
+func ExpectToolDenied(ctx context.Context, endpoint string, credentials Credentials, tool, topic string, output io.Writer) (err error) {
+	session, err := connect(ctx, endpoint, credentials)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, session.Close()) }()
+
+	_, callErr := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{"topic": topic}})
+	var rpcErr *jsonrpc.Error
+	if !errors.As(callErr, &rpcErr) || rpcErr.Code != codeToolNotPermitted {
+		return fmt.Errorf("expected %s to be denied by gateway policy, got: %v", tool, callErr)
+	}
+	if _, err := session.ListTools(ctx, nil); err != nil {
+		return fmt.Errorf("session unusable after denied call: %w", err)
+	}
+	_, err = fmt.Fprintf(output, "Tool %s denied by gateway policy (JSON-RPC %d): %s\nSession still usable after the denial.\n",
+		tool, rpcErr.Code, rpcErr.Message)
+	return err
+}
+
+func connect(ctx context.Context, endpoint string, credentials Credentials) (*mcp.ClientSession, error) {
+	if err := validateTarget(endpoint); err != nil {
+		return nil, err
+	}
 	if credentials.TokenFile == "" {
-		return errors.New("token file is required for an MCP workflow")
+		return nil, errors.New("token file is required for an MCP workflow")
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "portkeeper-demo", Version: "0.1.0"}, &mcp.ClientOptions{
@@ -74,11 +110,9 @@ func Run(ctx context.Context, endpoint string, credentials Credentials, topic st
 		DisableStandaloneSSE: true,
 	}, nil)
 	if err != nil {
-		return fmt.Errorf("connect to gateway: %w", err)
+		return nil, fmt.Errorf("connect to gateway: %w", err)
 	}
-	defer func() { err = errors.Join(err, session.Close()) }()
-
-	return readRunbook(ctx, session, endpoint, topic, output)
+	return session, nil
 }
 
 func validateTarget(endpoint string) error {

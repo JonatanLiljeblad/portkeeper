@@ -1,7 +1,8 @@
 # Architecture decisions
 
-These decisions describe the experimental v0.1.0 scope, not a production
-certification.
+The first table describes the experimental v0.1.0 scope. Decisions made
+after that release, including ones that reverse it, are listed separately
+below. Neither is a production certification.
 
 | Decision | Why | Consequence / evidence |
 |----------|-----|------------------------|
@@ -16,13 +17,25 @@ certification.
 | Real measurements with explicitly tuned benchmark profile | Default workload/API-client limits would confound proxy/authentication throughput measurements | `make benchmark` keeps auth/isolation enabled but temporarily raises both limits; reports are not production SLOs |
 | Experimental source release with reproducible evidence | Prefer verifiable behavior over production-ready branding or invented latency targets | Published workload/configuration, raw results, failure walkthrough and known limitations |
 
+## After v0.1.0
+
+| Decision | Why | Consequence / evidence |
+|----------|-----|------------------------|
+| **Reverses "transparent proxy":** the gateway reads MCP request bodies, never responses | Per-server access cannot express "may read, may not act"; the tool name exists only in the JSON-RPC body | Every POST to `/mcp` is buffered (1 MiB cap, ten-second read deadline) and parsed, about 4 µs for a typical call on the development machine; responses and SSE streams remain unbuffered and the streaming, cancellation and full-duplex tests still pass |
+| Strict request parsing, fail closed | A lenient gateway parser and a different backend parser can disagree on which tool a request names, bypassing policy | Duplicate or case-variant `method`/`params`/`name`, batches, trailing data and unattributable `tools/call` return 400; `TestInspectMCPRequest` covers each case. Non-conforming clients are refused rather than forwarded uninspected |
+| Optional `allowedTools` per account; omission means all tools | Changing the meaning of existing entries would silently lock out, or silently narrow, every v0.1.0 resource | Per-server deny-by-default is unchanged; tool restriction is opt-in per account and the API rejects an empty list |
+| Tool denial is a JSON-RPC error on HTTP 200, code `-32090` | An HTTP 403 is a transport failure to MCP SDKs and can end the session; an agent needs a failed call it can react to | SDK test and kind workflow show the denied call fails, the session continues, and the backend handler is never entered. HTTP status alone no longer identifies a denial |
+| `tools/list` is not filtered | Hiding tools needs response rewriting and SSE buffering, which the gateway refuses to do | Restricted clients can discover tools they cannot call; enforcement is on `tools/call` only. Resources and prompts are not governed |
+| Audit event per decision, on standard output | Operators need "who called which tool" from verified identity without trusting backends | `allow` means authorized and forwarded, not executed; arguments are never logged; durability and tamper-resistance belong to the log pipeline |
+| Decision metrics label only declared tools | Requested tool names are client-controlled | Undeclared names aggregate as `_other`; 1,024 declared server/tool pairs, then `_overflow` |
+
 ## Deliberately deferred
 
 Backend token injection (`authType`/`authSecretRef` remain reserved), external
-OIDC/OAuth login, tool aggregation, per-tool authorization, distributed quotas,
-HA controllers, backend replica/session routing, autoscaling, durable telemetry,
-and multi-cluster operation require separate designs. They are not implicit
-features of v0.1.0.
+OIDC/OAuth login, tool aggregation, tool-discovery filtering, argument-level
+policy, distributed quotas, HA controllers, backend replica/session routing,
+autoscaling, durable telemetry and audit storage, and multi-cluster operation
+require separate designs. They are not implicit features.
 
 Before exposing the gateway outside the local demo, provide TLS and protect
 its internal hop, restrict who can create workload tokens or change policy/

@@ -138,6 +138,16 @@ data:
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
           "targets": [{ "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(mcp_backend_tool_duration_seconds_bucket[5m])))", "legendFormat": "{{tool}}" }]
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "Gateway tool policy decisions",
+          "description": "Per-tool allow/deny decisions on MCP tools/call. allow means authorized and forwarded, not executed; compare with backend executions.",
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 27 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+          "targets": [{ "refId": "A", "expr": "sum by (namespace, server, tool, decision) (rate(mcp_gateway_tool_decisions_total[1m]))", "legendFormat": "{{namespace}}/{{server}} {{tool}} / {{decision}}" }]
         }
       ]
     }

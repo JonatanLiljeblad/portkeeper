@@ -21,6 +21,7 @@ func main() {
 	timeout := flag.Duration("timeout", 30*time.Second, "Deadline for the complete MCP workflow")
 	expectStatus := flag.Int("expect-status", 0, "Poll HTTP GET for this status instead of calling an MCP tool (0 disables)")
 	expectNetwork := flag.String("expect-network", "", "Probe TCP connectivity: allowed or blocked (requires healthy-target controls)")
+	expectDenied := flag.String("expect-tool-denied", "", "Call this tool and require a gateway policy denial that leaves the session usable")
 	benchmark := flag.Bool("benchmark", false, "Run SDK direct/gateway measurements and emit a JSON report")
 	directEndpoint := flag.String("direct-endpoint", "", "Direct backend MCP endpoint, never sent gateway credentials")
 	concurrency := flag.String("concurrency", "1,4,8", "Comma-separated benchmark worker counts")
@@ -43,8 +44,8 @@ func main() {
 	var err error
 	credentials := democlient.Credentials{TokenFile: *tokenFile, AgentID: *agent}
 	if *benchmark {
-		if *expectStatus != 0 || *expectNetwork != "" {
-			log.Fatal("benchmark, expect-status and expect-network are mutually exclusive")
+		if *expectStatus != 0 || *expectNetwork != "" || *expectDenied != "" {
+			log.Fatal("benchmark, expect-status, expect-network and expect-tool-denied are mutually exclusive")
 		}
 		var workers []int
 		for _, value := range strings.Split(*concurrency, ",") {
@@ -60,12 +61,17 @@ func main() {
 			WarmupPerWorker: *warmup, Repetitions: *repetitions, Topic: *topic,
 		}, os.Stdout)
 	} else if *expectNetwork != "" {
-		if (*expectNetwork != "allowed" && *expectNetwork != "blocked") || *expectStatus != 0 || *tokenFile != "" {
-			log.Fatal("expect-network must be allowed or blocked, without expect-status or token-file")
+		if (*expectNetwork != "allowed" && *expectNetwork != "blocked") || *expectStatus != 0 || *tokenFile != "" || *expectDenied != "" {
+			log.Fatal("expect-network must be allowed or blocked, without expect-status, expect-tool-denied or token-file")
 		}
 		err = democlient.ProbeNetwork(ctx, *endpoint, *expectNetwork == "blocked", os.Stdout)
 	} else if *expectStatus != 0 {
+		if *expectDenied != "" {
+			log.Fatal("expect-status and expect-tool-denied are mutually exclusive")
+		}
 		err = democlient.WaitForStatus(ctx, *endpoint, credentials, *expectStatus, os.Stdout)
+	} else if *expectDenied != "" {
+		err = democlient.ExpectToolDenied(ctx, *endpoint, credentials, *expectDenied, *topic, os.Stdout)
 	} else {
 		err = democlient.Run(ctx, *endpoint, credentials, *topic, os.Stdout)
 	}

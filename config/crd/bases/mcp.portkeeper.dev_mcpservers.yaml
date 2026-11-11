@@ -53,12 +53,28 @@ spec:
             properties:
               allowedServiceAccounts:
                 description: |-
-                  AllowedServiceAccounts authorizes verified client identities for all
-                  endpoints on this server. An empty list denies every client.
+                  AllowedServiceAccounts authorizes verified client identities for this
+                  server. An empty list denies every client. Each entry may narrow its
+                  account to specific MCP tools.
                 items:
                   description: ServiceAccountReference identifies a client ServiceAccount
                     in this cluster.
                   properties:
+                    allowedTools:
+                      description: |-
+                        AllowedTools restricts which MCP tools this account may call through
+                        the server's /mcp endpoint. When omitted, the account may call every
+                        tool and use every endpoint. When set, tools/call for any other tool is
+                        denied and only the /mcp endpoint is reachable. Tool discovery
+                        (tools/list) and non-tool MCP methods are not filtered.
+                      items:
+                        maxLength: 128
+                        minLength: 1
+                        type: string
+                      maxItems: 64
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
                     name:
                       maxLength: 253
                       minLength: 1

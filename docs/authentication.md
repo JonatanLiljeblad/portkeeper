@@ -45,11 +45,61 @@ spec:
       name: mcp-demo-client
 ```
 
-Entries refer to client ServiceAccounts, not backend ServiceAccounts. Each
-entry authorizes all endpoints on that one namespaced MCP server. There are
-no wildcards or tool-level permissions. A legacy name-only route resolves
-the exact server first and applies that server's policy; it cannot bypass
-namespace authorization. Ambiguous legacy names still return HTTP 409.
+Entries refer to client ServiceAccounts, not backend ServiceAccounts. An
+entry without `allowedTools` authorizes all endpoints and all tools on that
+one namespaced MCP server. There are no wildcards. A legacy name-only route
+resolves the exact server first and applies that server's policy; it cannot
+bypass namespace authorization. Ambiguous legacy names still return HTTP 409.
+
+## Per-tool authorization
+
+An entry can narrow its account to named tools:
+
+```yaml
+spec:
+  allowedServiceAccounts:
+    - namespace: portkeeper-demo
+      name: mcp-readonly-client
+      allowedTools:
+        - read_runbook
+```
+
+- **Omitted `allowedTools`** keeps the v0.1.0 meaning: every tool. Existing
+  resources are unaffected by the upgrade. The API rejects an empty list;
+  a gateway that nevertheless observes one permits no tool.
+- **With `allowedTools`**, a `tools/call` naming any other tool is denied.
+  Names match exactly and are case-sensitive. The account can reach only the
+  server's `/mcp` endpoint; other endpoints return 403, because only the
+  inspected MCP endpoint can enforce the list.
+- **A denial is not an HTTP error.** The gateway answers HTTP 200 with a
+  JSON-RPC error, code `-32090`, echoing the request id. An MCP client
+  reports a failed call and keeps its session. The backend never receives
+  the request.
+- **Not governed:** `tools/list` is forwarded unfiltered, so a restricted
+  client can see the names and descriptions of tools it cannot call. Other
+  MCP methods (resources, prompts, completions) are not restricted by this
+  list. Filtering discovery would require rewriting responses, which the
+  gateway does not do.
+- Every decision is written to the [audit trail](observability.md#tool-audit-trail).
+
+To enforce this the gateway reads the request body of every POST to an
+`/mcp` route, for all accounts. It reads only requests, never responses or
+streams. The body must be one JSON-RPC message of at most 1 MiB
+(`GATEWAY_MCP_MAX_REQUEST_BYTES`), delivered within ten seconds.
+
+The check is only sound if the backend sees the same method and tool the
+gateway saw, and JSON parsers disagree on ambiguous input. The gateway
+therefore refuses, with HTTP 400, a body that repeats `method`, `params`,
+`id`, `jsonrpc`, or the `name` inside `params`, or that spells one of them
+with different case (Go's JSON decoder would match `Name` to `name`). It
+also refuses JSON-RPC batches (removed from MCP in 2025-06-18), trailing
+data, a `tools/call` without a string tool name or without an id, bodies
+over the limit (413), and compressed bodies (415). These refusals apply to
+every account, so they are an upgrade consideration for non-conforming
+clients.
+
+Policy changes follow the registry: a narrowed or widened list applies to
+new requests within the five-second poll.
 
 **Upgrade behavior:** existing clients that only send `X-Agent-ID` now receive
 401, and existing CRs without `allowedServiceAccounts` deny authenticated
@@ -123,7 +173,9 @@ not a global quota or a shared rate-limit service.
 | HTTP status | Meaning |
 |-------------|---------|
 | 401 | Missing, invalid, expired, or wrong-audience token; includes a Bearer challenge |
-| 403 | Verified ServiceAccount not allowed for the resolved server |
+| 403 | Verified ServiceAccount not allowed for the resolved server, or a tool-restricted account using a non-MCP endpoint |
+| 200 + JSON-RPC error `-32090` | Verified, allowed account called a tool outside its `allowedTools` |
+| 400 / 413 / 415 | MCP POST body that cannot be safely inspected: ambiguous or malformed, batch / too large / compressed |
 | 404 / 409 | Unknown server / ambiguous legacy server name |
 | 429 | Verified agent exhausted its budget, or limiter identity capacity reached |
 | 503 | TokenReview unavailable/overloaded, stale policy, or authorized backend unready |

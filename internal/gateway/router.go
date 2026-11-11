@@ -3,9 +3,11 @@ package gateway
 import (
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -17,10 +19,19 @@ type Router struct {
 	registry *Registry
 	limiter  *AgentLimiter
 	auth     Authenticator
+
+	// AuditLog receives one structured event per tools/call decision.
+	AuditLog *slog.Logger
+	// MaxMCPRequestBytes caps an inspected MCP POST body.
+	MaxMCPRequestBytes int64
 }
 
 func NewRouter(reg *Registry, limiter *AgentLimiter, auth Authenticator) *Router {
-	return &Router{registry: reg, limiter: limiter, auth: auth}
+	return &Router{
+		registry: reg, limiter: limiter, auth: auth,
+		AuditLog:           slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+		MaxMCPRequestBytes: DefaultMaxMCPRequestBytes,
+	}
 }
 
 func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -85,10 +96,40 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(recorder, "authorization policy is stale", http.StatusServiceUnavailable)
 		return
 	}
-	if !backend.allows(agentID) {
+	account, authorized := backend.account(agentID)
+	if !authorized {
 		http.Error(recorder, "agent is not authorized for this MCP server", http.StatusForbidden)
 		return
 	}
+
+	// Tool policy is decided before readiness so a denial never depends on,
+	// or discloses, backend state.
+	var inspected []byte
+	var call *toolCall
+	switch {
+	case toolName == "mcp" && req.Method == http.MethodPost:
+		body, msg, status, problem := rt.readMCPRequest(recorder, req)
+		if status != 0 {
+			http.Error(recorder, problem, status)
+			return
+		}
+		inspected = body
+		if msg.Method == toolsCallMethod {
+			allowed, reason := authorizeTool(account, msg.Tool)
+			if !allowed {
+				rt.audit(req.Context(), agentID, backend, msg.Tool, "deny", reason)
+				recordToolDecision(metricNamespace, metricServer, backend, msg.Tool, "deny")
+				writeToolDenied(recorder, msg.ID, msg.Tool)
+				return
+			}
+			call = &toolCall{tool: msg.Tool, reason: reason}
+		}
+	case toolName != "mcp" && account.AllowedTools != nil:
+		// Only the inspected MCP endpoint can enforce a tool allowlist.
+		http.Error(recorder, "this client is restricted to the MCP endpoint of this server", http.StatusForbidden)
+		return
+	}
+
 	if !backend.Ready {
 		recorder.Header().Set("Retry-After", "5")
 		http.Error(recorder, "MCP server is not ready", http.StatusServiceUnavailable)
@@ -122,6 +163,13 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	outReq := req.Clone(req.Context())
 	outReq.URL.Path = "/" + toolName
 	outReq.URL.RawPath = ""
+	if inspected != nil {
+		replaceBody(outReq, inspected)
+	}
+	if call != nil {
+		rt.audit(req.Context(), agentID, backend, call.tool, "allow", call.reason)
+		recordToolDecision(metricNamespace, metricServer, backend, call.tool, "allow")
+	}
 
 	completed = false
 	proxy.ServeHTTP(recorder, outReq)

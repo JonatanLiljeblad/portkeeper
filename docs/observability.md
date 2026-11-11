@@ -1,11 +1,13 @@
 # Observability contract
 
-Portkeeper deliberately measures two different things. The gateway measures
-**HTTP transport requests** without inspecting JSON-RPC bodies. The instrumented
-runbook backend measures **actual MCP tool-handler executions**. Initializing
-a session, discovering tools, or opening an SSE connection is not a tool
-execution. A third-party MCP server needs its own execution instrumentation;
-the gateway cannot prove a tool ran merely because it proxied a request.
+Portkeeper deliberately measures different things. The gateway measures
+**HTTP transport requests** and, for MCP `tools/call` requests, its own
+**policy decisions**. The instrumented runbook backend measures **actual MCP
+tool-handler executions**. Initializing a session, discovering tools, or
+opening an SSE connection is not a tool execution, and neither is an allowed
+decision: `allow` means the gateway authorized and forwarded the call. A
+third-party MCP server needs its own execution instrumentation; the gateway
+never reads responses, so it cannot prove a tool ran.
 
 ## Metrics
 
@@ -15,8 +17,14 @@ the gateway cannot prove a tool ran merely because it proxied a request.
 | `mcp_gateway_http_request_duration_seconds` | `namespace`, `server`, `endpoint` | Full HTTP request lifetime, including authentication and streaming |
 | `mcp_gateway_http_requests_in_flight` | none | Active handlers, including TokenReview and open streams |
 | `mcp_gateway_rate_limited_total` | `agent` | Requests rejected by the verified-identity limiter |
+| `mcp_gateway_tool_decisions_total` | `namespace`, `server`, `tool`, `decision` | Per-tool policy decisions on `tools/call`; `decision` is `allow` or `deny` |
+| `mcp_gateway_mcp_request_rejections_total` | `reason` | MCP POST bodies refused before policy because they could not be safely inspected |
 | `mcp_backend_tool_invocations_total` | `tool`, `outcome` | Completed instrumented tool-handler invocations |
 | `mcp_backend_tool_duration_seconds` | `tool`, `outcome` | Time spent executing those handlers |
+
+A denied tool call is answered with HTTP 200 and a JSON-RPC error, so it is
+`status="200"` in the HTTP metrics. Use `mcp_gateway_tool_decisions_total`,
+not HTTP status, to count denials.
 
 `result` is `complete` or `aborted`. A stream can send HTTP 200 and later
 abort; it is then counted as `status="200",result="aborted"`, not a successful
@@ -56,6 +64,13 @@ topics, arbitrary URL paths, or arbitrary unverified caller identities.
 - Rate-limit metrics retain at most **128 verified identities**, then use
   `agent="_overflow"`. This metric budget is separate from the 10,000-bucket
   enforcement limit; aggregation does not change anyone's quota.
+- The `tool` label of decision metrics is a tool name only when the server's
+  resource declares it, in `spec.tools` or in an account's `allowedTools`.
+  Any other requested name is `tool="_other"`, so a client cannot allocate
+  series by inventing tool names. At most **1,024 declared server/tool
+  pairs** keep their own label; further ones use `tool="_overflow"`.
+  Rejection reasons are a fixed set: `malformed`, `batch`, `too_large`,
+  `unsupported_encoding`, `unreadable`.
 - Backend tool labels come only from the two registered tool names, and
   outcome has three values. Operators must likewise bound scrape-target
   churn in Prometheus retention; process-local limits are not a global
@@ -84,6 +99,28 @@ The read-only `stream_runbook` demo emits progress before its final result;
 the benchmark records first-progress and completion latency separately.
 
 ## Logs and failure evidence
+
+### Tool audit trail
+
+For every `tools/call` it decides, the gateway writes one JSON line to
+standard output:
+
+```json
+{"time":"...","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-readonly-client","namespace":"portkeeper-demo","server":"runbooks","tool":"stream_runbook","decision":"deny","reason":"tool_not_listed"}
+```
+
+`agent` is the verified identity. `reason` is `tool_listed`,
+`account_unrestricted`, or `tool_not_listed`. An `allow` event is written
+immediately before the call is forwarded; a call that is authorized but not
+forwarded (for example because the backend is unready) produces no event.
+The event records the decision, not the outcome: it does not say whether the
+backend executed the tool or what it returned. Tool arguments are never
+logged. The requested tool name is client-controlled, so it is JSON-escaped
+and cut to 128 bytes, with `"tool_truncated":true` when cut.
+
+The trail is a log stream, not a tamper-evident store. Retention, shipping,
+and access control are the operator's log pipeline. Events are per gateway
+process and are lost if standard output is not collected.
 
 The gateway emits `gateway_request` with quoted namespace/server/endpoint,
 verified agent, HTTP status, a `completed` flag, and request lifetime.

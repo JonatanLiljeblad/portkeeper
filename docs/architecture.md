@@ -17,8 +17,8 @@
      │ reconcile loop:     │                  │ - list MCPServers  │
      │ MCPServer spec  ->  │                  │ - route request    │
      │ Deployment+Service  │                  │   to matching pod  │
-     └────────┬────────────┘                  │ - log/metric each  │
-              │ creates/manages                │   tool call        │
+     └────────┬────────────┘                  │ - decide and audit │
+              │ creates/manages                │   each tool call   │
               │                                └─────────┬─────────┘
      ┌────────▼─────────┐                                │
      │  MCP Server Pod    │◄───────── proxied requests ───┘
@@ -50,20 +50,27 @@
    keys. Legacy `/<server-name>/<endpoint>` routes resolve only when the
    name is cluster-unique; ambiguity returns 409, including when one of the
    colliding servers is unready.
-5. The backend handles MCP initialization, discovery, and tool execution.
+5. For a POST to `/mcp`, the gateway buffers and strictly parses the one
+   JSON-RPC request message. A `tools/call` is checked against the account's
+   optional `allowedTools`; a denial is answered by the gateway as a JSON-RPC
+   error and never forwarded. Each decision is written to the audit trail.
+   See [per-tool authorization](authentication.md#per-tool-authorization).
+6. The backend handles MCP initialization, discovery, and tool execution.
    The gateway forwards protocol headers, bodies, responses, and cancellation
-   without owning sessions or interpreting tool calls. Its response wrapper
+   without owning sessions or reading responses. Its response wrapper
    exposes `Unwrap` so the reverse proxy can flush SSE responses and enable
    full-duplex HTTP/1 request handling. Without full duplex, an early response
    flush can close the inbound body while the upstream transport is still
    checking its EOF, aborting an otherwise healthy stream. HTTP/2 already
-   supports concurrent request reads and response writes.
+   supports concurrent request reads and response writes. Inspected MCP POST
+   bodies are fully read before proxying; other request bodies still stream.
    Gateway credentials are stripped and `X-Agent-ID` is overwritten with
    the verified username before proxying.
-6. The gateway logs and measures HTTP handlers using explicit HTTP metric
+7. The gateway logs and measures HTTP handlers using explicit HTTP metric
    names and `endpoint="mcp"`. In-flight requests include open streams;
-   completed and aborted responses are distinct. Backend instrumentation
-   counts actual tool executions without teaching the gateway JSON-RPC.
+   completed and aborted responses are distinct. Tool decisions have their
+   own counter. Backend instrumentation counts actual tool executions; the
+   gateway does not infer execution from traffic.
    Namespace/server labels are bounded, and unresolved routes aggregate
    without reflecting arbitrary client-supplied names.
 

@@ -2,25 +2,45 @@
 
 ![A Kubernetes-native gateway and registry for MCP (Model Context Protocol) servers.](./assets/banner.png)
 
-**Experimental v0.1.0:** a reproducible single-replica MCP control-plane and
-gateway demo, not a production-ready or highly available deployment.
-[Release and evidence](https://github.com/JonatanLiljeblad/portkeeper/releases/tag/v0.1.0).
+**Experimental:** v0.1.0 is released; `main` carries v0.2 work in progress
+(per-tool authorization and audit). A reproducible single-replica demo, not
+a production-ready or highly available deployment.
+[v0.1.0 release and evidence](https://github.com/JonatanLiljeblad/portkeeper/releases/tag/v0.1.0).
 
 ## Why this exists
 
-Teams running multiple MCP servers today have no shared way to discover them,
-authenticate calls to them, or see who's calling what. This project turns
-"a pile of MCP servers" into a managed fleet — the same shift Kubernetes made
-for containers.
+AI agents act through MCP servers. Once a team runs more than a few, nobody
+can answer three questions: which servers exist, which agent is allowed to
+call which tool, and what each agent actually did. Portkeeper answers them
+with Kubernetes primitives, turning "a pile of MCP servers" into a managed
+fleet.
 
 - **Registry**: MCP servers are declared as a Kubernetes Custom Resource
   (`MCPServer`), so `kubectl get mcpservers` just works.
-- **Gateway**: a single entrypoint that all clients/agents talk to. It looks
-  up the live registry via the Kubernetes API and routes each request to the
+- **Gateway**: a single entrypoint that all clients/agents talk to. It
+  verifies each caller's Kubernetes identity and routes the request to the
   right backend.
+- **Tool-level policy and audit**: each server lists which identities may
+  use it and, optionally, which tools. A call outside the list is refused at
+  the gateway, and every tool decision is recorded against the verified
+  identity.
 - **Observability**: proxied HTTP requests are logged and exported as
   Prometheus metrics, separately from actual tool executions measured by the
   instrumented runbook backend. Third-party backends need their own tool metrics.
+
+## See it work
+
+With Docker running, kind v0.33.0, and kubectl v1.35 or v1.36 installed:
+
+```bash
+make e2e
+```
+
+One command builds the images, creates a disposable kind cluster, deploys the
+controller, gateway and a real MCP server, and runs MCP SDK clients against
+it: one allowed, one denied, one allowed a single tool and refused another.
+It takes about eight minutes and deletes the cluster afterwards. The
+[captured run](docs/demo.txt) shows the output without running anything.
 
 See [PLAN.md](./PLAN.md) for the full design rationale and roadmap, and
 [docs/architecture.md](./docs/architecture.md) for how the pieces fit
@@ -30,18 +50,26 @@ together.
 
 ```
 cmd/
-  controller/     # entrypoint for the MCPServer controller (operator)
-  gateway/        # entrypoint for the gateway/proxy
-api/v1alpha1/     # the MCPServer CRD Go types
+  controller/          # entrypoint for the MCPServer controller (operator)
+  gateway/             # entrypoint for the gateway/proxy
+api/v1alpha1/          # the MCPServer CRD Go types
 internal/
-  controller/     # reconcile loop: MCPServer -> Deployment + Service
-  gateway/        # registry lookup, routing, proxying, metrics
+  controller/          # reconcile loop: MCPServer -> Deployment + Service
+  gateway/             # authentication, policy, request inspection, routing, metrics
+  runbookmcp/          # read-only MCP demo backend (official Go SDK)
+  democlient/          # MCP SDK client used by the demo, probes and benchmark
+hack/
+  e2e-kind.sh          # the make e2e / make benchmark workflow
+  runbook-mcp-server/  # entrypoint for the demo backend
+  mcp-client/          # entrypoint for the demo client
+  toy-mcp-server/      # legacy non-MCP HTTP backend (separate Go module)
 config/
-  crd/            # generated CRD YAML
-  samples/        # example MCPServer objects
-  rbac/           # controller's RBAC permissions
-deploy/           # kind cluster config + gateway deployment manifest
-docs/             # architecture notes
+  crd/                 # generated CRD YAML
+  samples/             # example MCPServer objects
+  rbac/                # controller and gateway cluster roles
+deploy/                # in-cluster manifests: gateway, controller, RBAC,
+                       # network policy, client jobs, Prometheus, Grafana
+docs/                  # architecture, authentication, observability, evidence
 ```
 
 ## Status
@@ -53,7 +81,9 @@ Readiness follows the current Deployment rollout, and namespaced routes
 isolate same-name backends. The demo also exercises updates, recovery,
 owned-resource recreation, and Kubernetes garbage collection.
 The gateway authenticates audience-bound Kubernetes ServiceAccount tokens
-and applies deny-by-default per-server policy. The kind workflow enforces
+and applies deny-by-default per-server policy. An account can additionally
+be limited to named tools; the gateway refuses other `tools/call` requests
+and writes an audit event for every tool decision. The kind workflow enforces
 backend NetworkPolicy with Calico and demonstrates direct-access denial. See
 [authentication and migration](docs/authentication.md).
 Operational behavior and boundaries are documented in
@@ -113,8 +143,13 @@ the gateway at `/<namespace>/<server-name>/mcp` and must send
 request. The server must allow the client in `spec.allowedServiceAccounts`.
 `X-Agent-ID` is ignored as identity and overwritten with the verified
 ServiceAccount username upstream; gateway credentials are stripped.
-The gateway forwards the body, protocol/session headers, and
-streamed responses rather than aggregating tools or terminating MCP.
+The gateway forwards protocol/session headers and streamed responses rather
+than aggregating tools or terminating MCP. It reads the body of each POST to
+`/mcp` to identify the tool being called, then forwards it unchanged. An
+account with `allowedTools` receives a JSON-RPC error (code `-32090`, HTTP
+200) for any other tool, and the call never reaches the backend. Bodies that
+cannot be inspected unambiguously are refused; see
+[per-tool authorization](docs/authentication.md#per-tool-authorization).
 Legacy `/<server-name>/<endpoint>` routes work when the server name is unique
 across the cluster; ambiguous names return **409 Conflict** rather than
 selecting an arbitrary backend. Namespaced toy routes also work.
@@ -151,7 +186,9 @@ and record long-lived streams only when they finish. Metrics and logs include
 the resolved namespace; unresolved legacy requests have an empty namespace.
 Rate-limit state is capped at 10,000 identities per process; replicas do not
 share quotas. Actual tool-execution metrics come from the instrumented backend,
-not gateway traffic inspection. See [metric names and cardinality limits](docs/observability.md).
+not gateway traffic inspection. Tool policy governs `tools/call` only:
+discovery is not filtered and resources/prompts are not restricted. See
+[metric names and cardinality limits](docs/observability.md).
 
 ## Local development
 
@@ -258,3 +295,7 @@ kubectl delete -f deploy/grafana.yaml -f deploy/prometheus.yaml
 ```
 
 See `Makefile` for shortcuts to the above.
+
+## License
+
+[Apache License 2.0](./LICENSE).

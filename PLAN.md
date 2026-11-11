@@ -175,12 +175,16 @@ engineering, with identity and policy as the supporting depth.
 
 The same delivery rules apply: one checkpoint at a time, acceptance backed by
 reproducible evidence, commit and push, explain remaining limitations, pause.
+Treat each checkpoint as work for a company: weigh safety, operating cost,
+and efficiency, and build what is useful rather than what is impressive.
+The summary after a checkpoint proposes a roadmap change only when there is
+a specific reason or a better way to solve a problem.
 Each checkpoint that reverses a v0.1.0 decision records the new decision in
 `docs/decisions.md`.
 
 ### 6. Repository baseline and tool-level governance
 
-Status: not started.
+Status: complete.
 
 Baseline, before the feature work:
 
@@ -215,6 +219,23 @@ Acceptance: in kind, one ServiceAccount calls an allowed tool and is denied a
 second tool on the same server; the denial is a clean SDK-visible error; both
 decisions appear in the audit log and metrics; the streaming and cancellation
 regressions and the full-duplex behavior still pass.
+
+Delivered: Apache-2.0 license, repository description and topics, and a
+problem-first README with a corrected layout. `allowedTools` is an optional
+per-account list; omission keeps the v0.1.0 meaning of all tools. Every POST
+to `/mcp` is buffered (1 MiB, ten-second read deadline) and strictly parsed;
+ambiguous bodies that different JSON parsers could read differently are
+refused. A denied `tools/call` returns a JSON-RPC error (`-32090`) on HTTP
+200, before readiness is consulted, and never reaches the backend. Each
+decision produces a structured audit event and a bounded-label counter, with
+a dashboard panel. `make e2e` step 4c proves allow, deny, session survival,
+audit attribution, and non-execution against the real cluster.
+
+Remaining limitations: `tools/list` is not filtered; resources and prompts
+are not governed; policy is by tool name, not arguments; the audit trail is
+a log stream without durable or tamper-evident storage; an allowed event
+does not prove execution. The cost of inspection is measured only by a
+parser micro-benchmark; the end-to-end figure is refreshed in checkpoint 10.
 
 ### 7. Standard MCP authorization (OAuth 2.1 / OIDC)
 

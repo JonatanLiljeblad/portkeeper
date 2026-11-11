@@ -1,0 +1,5 @@
+# HELP mcp_gateway_http_requests_total Finished routed HTTP requests, including rejections and aborted streams; not MCP tool executions.
+# HELP mcp_gateway_tool_decisions_total Gateway policy decisions for MCP tools/call requests. allow means authorized and forwarded, not executed.
+# TYPE mcp_gateway_tool_decisions_total counter
+mcp_gateway_tool_decisions_total{decision="allow",namespace="portkeeper-demo",server="runbooks",tool="read_runbook"} 2
+mcp_gateway_tool_decisions_total{decision="deny",namespace="portkeeper-demo",server="runbooks",tool="stream_runbook"} 1

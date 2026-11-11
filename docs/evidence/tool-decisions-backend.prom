@@ -1,0 +1,3 @@
+# HELP mcp_backend_tool_invocations_total Completed backend tool handler executions, excluding protocol validation failures.
+# TYPE mcp_backend_tool_invocations_total counter
+mcp_backend_tool_invocations_total{outcome="success",tool="read_runbook"} 2

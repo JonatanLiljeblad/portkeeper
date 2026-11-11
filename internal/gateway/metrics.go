@@ -40,10 +40,43 @@ var (
 	)
 	serverMetricLabels = boundedLabels{limit: 256, values: make(map[string]struct{})}
 	agentMetricLabels  = boundedLabels{limit: 128, values: make(map[string]struct{})}
+
+	toolDecisionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mcp_gateway_tool_decisions_total",
+			Help: "Gateway policy decisions for MCP tools/call requests. allow means authorized and forwarded, not executed.",
+		},
+		[]string{"namespace", "server", "tool", "decision"},
+	)
+
+	mcpRequestRejectionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mcp_gateway_mcp_request_rejections_total",
+			Help: "MCP POST bodies refused before policy evaluation because they could not be safely inspected.",
+		},
+		[]string{"reason"},
+	)
+	toolMetricLabels = boundedLabels{limit: 1024, values: make(map[string]struct{})}
 )
 
 func init() {
-	prometheus.MustRegister(httpRequestsTotal, httpRequestDuration, httpRequestsInFlight, rateLimitedTotal)
+	prometheus.MustRegister(httpRequestsTotal, httpRequestDuration, httpRequestsInFlight, rateLimitedTotal,
+		toolDecisionsTotal, mcpRequestRejectionsTotal)
+}
+
+// recordToolDecision labels only tools named in the server's resource, so a
+// client cannot allocate series by calling arbitrary tool names.
+func recordToolDecision(namespace, server string, b Backend, tool, decision string) {
+	label := "_other"
+	if server == "_overflow" {
+		label = "_overflow"
+	} else if b.declaresTool(tool) {
+		label = tool
+		if !toolMetricLabels.admit(b.Namespace + "/" + b.Name + "/" + tool) {
+			label = "_overflow"
+		}
+	}
+	toolDecisionsTotal.WithLabelValues(namespace, server, label, decision).Inc()
 }
 
 // Label admissions are permanent for the process lifetime. Eviction would only

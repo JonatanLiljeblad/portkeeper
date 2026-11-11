@@ -25,6 +25,7 @@ type Backend struct {
 	Name                   string
 	Address                string // "<service>.<namespace>.svc.cluster.local:<port>"
 	Ready                  bool
+	Tools                  []string // declared spec.tools metadata; bounds metric labels only
 	AllowedServiceAccounts []mcpv1alpha1.ServiceAccountReference
 	PolicyObservedAt       time.Time
 }
@@ -33,8 +34,28 @@ type Backend struct {
 const policyMaxAge = 15 * time.Second
 
 func (b Backend) allows(principal string) bool {
+	_, ok := b.account(principal)
+	return ok
+}
+
+// account returns the policy entry authorizing a verified principal.
+func (b Backend) account(principal string) (mcpv1alpha1.ServiceAccountReference, bool) {
 	for _, account := range b.AllowedServiceAccounts {
 		if principal == "system:serviceaccount:"+account.Namespace+":"+account.Name {
+			return account, true
+		}
+	}
+	return mcpv1alpha1.ServiceAccountReference{}, false
+}
+
+// declaresTool reports whether the server's resource names the tool, either as
+// metadata or in any account's allowlist. Only such names become metric labels.
+func (b Backend) declaresTool(tool string) bool {
+	if slices.Contains(b.Tools, tool) {
+		return true
+	}
+	for _, account := range b.AllowedServiceAccounts {
+		if slices.Contains(account.AllowedTools, tool) {
 			return true
 		}
 	}
@@ -129,6 +150,7 @@ func (r *Registry) refresh(ctx context.Context) {
 			Name:                   item.Name,
 			Address:                addr,
 			Ready:                  item.IsReady(),
+			Tools:                  slices.Clone(item.Spec.Tools),
 			AllowedServiceAccounts: slices.Clone(item.Spec.AllowedServiceAccounts),
 			PolicyObservedAt:       observedAt,
 		}

@@ -61,6 +61,11 @@ The captured walkthrough shows these stages:
    ServiceAccount, 401 for missing/invalid/wrong-audience tokens, and 403
    when the denied identity spoofs `X-Agent-ID`. Remove the allowlist and
    verify deny-by-default on both namespaced and unique legacy URLs.
+   Then use `mcp-readonly-client`, whose entry lists only `read_runbook`:
+   it reads a runbook, is denied `stream_runbook` with a JSON-RPC error while
+   its session stays usable, and both decisions appear in the gateway's audit
+   log and decision metrics. The backend's execution counter confirms the
+   denied tool never ran.
 5. Declare another `runbooks` server in `portkeeper-other`. Call it by
    namespace, observe 409 for the ambiguous old URL and 404 for a missing
    server. Verify denied identities cannot access the other namespace.
@@ -142,7 +147,9 @@ spec:
 ```
 
 An absent or empty allowlist denies everyone. Both runbook samples allow this
-same identity, including when it accesses `portkeeper-other`. Unique legacy
+same identity, including when it accesses `portkeeper-other`. The demo sample
+also allows `mcp-readonly-client` with `allowedTools: [read_runbook]`; see
+[per-tool authorization](authentication.md#per-tool-authorization). Unique legacy
 URLs enforce the same authorization; duplicate server names remain ambiguous.
 `authType` and `authSecretRef` are reserved, unimplemented **backend credential**
 metadata, not client authentication controls.

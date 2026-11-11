@@ -424,6 +424,34 @@ demo() {
   wait_ready portkeeper-demo runbooks True
   probe restored-allowlist /portkeeper-demo/runbooks/mcp 400
 
+  echo "=== 4c. Enforce a per-tool allowlist; audit each decision ==="
+  readonly_identity="system:serviceaccount:portkeeper-demo:mcp-readonly-client"
+  CLIENT_SA=mcp-readonly-client run_client readonly-allowed /portkeeper-demo/runbooks/mcp
+  CLIENT_SA=mcp-readonly-client run_client readonly-denied /portkeeper-demo/runbooks/mcp \
+    -expect-tool-denied=stream_runbook
+  grep -Fq 'Tool stream_runbook denied by gateway policy' "$log_dir/readonly-denied.log"
+  grep -Fq 'Session still usable after the denial.' "$log_dir/readonly-denied.log"
+  k logs -n portkeeper-system deployment/mcp-gateway | grep -F '"msg":"mcp_tool_decision"' >"$log_dir/tool-audit.jsonl"
+  # Pipelines avoid grep -q: an early exit would fail upstream greps under pipefail.
+  grep -F "\"agent\":\"$readonly_identity\"" "$log_dir/tool-audit.jsonl" |
+    grep -F '"tool":"read_runbook"' | grep -F '"decision":"allow","reason":"tool_listed"' >/dev/null
+  grep -F "\"agent\":\"$readonly_identity\"" "$log_dir/tool-audit.jsonl" |
+    grep -F '"tool":"stream_runbook"' | grep -F '"decision":"deny","reason":"tool_not_listed"' >/dev/null
+  if grep -F '"tool":"stream_runbook"' "$log_dir/tool-audit.jsonl" | grep -F '"decision":"allow"' >/dev/null; then
+    echo "A stream_runbook call was allowed before the benchmark" >&2
+    exit 1
+  fi
+  gateway_metrics >"$log_dir/gateway-tool-decisions.prom"
+  grep -Eq '^mcp_gateway_tool_decisions_total\{decision="deny",namespace="portkeeper-demo",server="runbooks",tool="stream_runbook"\} 1$' \
+    "$log_dir/gateway-tool-decisions.prom"
+  grep -Eq '^mcp_gateway_tool_decisions_total\{decision="allow",namespace="portkeeper-demo",server="runbooks",tool="read_runbook"\} [1-9]' \
+    "$log_dir/gateway-tool-decisions.prom"
+  # The denied call never reached the backend's tool handler.
+  backend_metrics >"$log_dir/backend-after-denial.prom"
+  awk '/^mcp_backend_tool_invocations_total.*tool="stream_runbook"/ { n += $NF } END { exit n != 0 }' \
+    "$log_dir/backend-after-denial.prom"
+  echo "Allowed and denied tool calls are attributed to $readonly_identity; the denied tool did not execute."
+
   echo "=== 5. Isolate same-name backends in different namespaces ==="
   k apply -f config/samples/mcp_v1alpha1_runbooks_other.yaml
   wait_ready portkeeper-other runbooks True

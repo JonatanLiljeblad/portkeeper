@@ -52,6 +52,18 @@ must fail closed with 503. Authentication failures return 401; verified but
 unauthorized accounts receive 403 before backend readiness is disclosed.
 Existing streams are not reauthorized mid-response. See docs/authentication.md.
 
+An account entry's optional `allowedTools` restricts `tools/call` on `/mcp`;
+omission means all tools, a non-nil empty list permits none. The gateway
+buffers and strictly parses every POST to `/mcp` (`internal/gateway/inspect.go`,
+1 MiB default via `GATEWAY_MCP_MAX_REQUEST_BYTES`). Keep the parser stricter
+than any backend: reject duplicate or case-folded `method`/`params`/`id`/
+`jsonrpc`/`name` members, batches and trailing data rather than forwarding
+them. Denials are HTTP 200 JSON-RPC errors (`-32090`), decided before
+readiness. Each decision emits one `mcp_tool_decision` JSON audit line on
+stdout; `allow` is logged only when the call is forwarded. Tool-restricted
+accounts get 403 on non-`mcp` endpoints. Never read responses, filter
+`tools/list`, or log tool arguments.
+
 `hack/toy-mcp-server` is a standalone nested Go module and demo HTTP backend,
 not part of the root module's `./...` package pattern.
 `internal/runbookmcp` and `hack/runbook-mcp-server` are in the root module
@@ -144,7 +156,9 @@ Negative Service/PodIP probes must retain their exact-target healthy controls.
   `endpoint` is mcp|other; `result` is complete|aborted, including failures
   after HTTP200 headers. Open streams remain in the in-flight gauge.
   Actual execution metrics are `mcp_backend_tool_*` in the instrumented backend.
-  Do not parse/buffer gateway JSON-RPC to infer execution.
+  Do not parse/buffer gateway responses to infer execution.
+  `mcp_gateway_tool_decisions_total` counts policy decisions; its `tool`
+  label admits only names declared in the CR (else `_other`), capped at 1,024.
 - Gateway metrics are registered globally in `internal/gateway/metrics.go` and
   are consumed by the Grafana dashboard in `deploy/grafana.yaml`. Preserve
   their label contracts unless updating the dashboard and queries too.

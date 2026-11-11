@@ -7,8 +7,14 @@ spec:
   allowedServiceAccounts:
     - namespace: portkeeper-demo
       name: mcp-demo-client
+    # Narrowed to one tool; tools/call for anything else is denied and audited.
+    - namespace: portkeeper-demo
+      name: mcp-readonly-client
+      allowedTools:
+        - read_runbook
   image: portkeeper/runbooks:e2e
   port: 9001
   tools:
     - read_runbook
+    - stream_runbook
   authType: none

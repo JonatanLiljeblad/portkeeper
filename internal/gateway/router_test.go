@@ -237,7 +237,7 @@ func TestRouterNamespaceIsolationAndReadiness(t *testing.T) {
 		{"/pending/mcp", 503, "not ready"},
 	} {
 		t.Run(tt.path, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, tt.path, nil)
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			req.Header.Set("X-Agent-ID", "isolation-test")
 			req.Header.Set("Authorization", "Bearer test-token")
 			w := httptest.NewRecorder()
@@ -261,7 +261,7 @@ func TestRouterConnectionFailure(t *testing.T) {
 			AllowedServiceAccounts: testAccounts, PolicyObservedAt: time.Now(),
 		},
 	}}, NewAgentLimiter(5, 10), testAuthenticator(t))
-	req := httptest.NewRequest(http.MethodPost, "/test/down/mcp", nil)
+	req := httptest.NewRequest(http.MethodGet, "/test/down/mcp", nil)
 	req.Header.Set("X-Agent-ID", "failure-test")
 	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()

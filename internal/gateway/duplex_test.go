@@ -75,7 +75,9 @@ func testProxyFlushDoesNotCloseRequestBody(t *testing.T, http2 bool) {
 		server.Start()
 	}
 	defer server.Close()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/test/demo/mcp", strings.NewReader(`{"method":"tools/call"}`))
+	// A non-MCP endpoint keeps the streamed request body; MCP POST bodies are
+	// buffered for inspection and no longer exercise this path.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/test/demo/echo", strings.NewReader(`{"method":"tools/call"}`))
 	if err != nil {
 		t.Fatal(err)
 	}

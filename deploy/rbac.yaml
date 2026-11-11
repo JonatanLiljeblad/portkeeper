@@ -12,6 +12,14 @@ metadata:
   namespace: portkeeper-demo
 automountServiceAccountToken: false
 ---
+# Allowed on the runbooks server, but only for the read_runbook tool.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-readonly-client
+  namespace: portkeeper-demo
+automountServiceAccountToken: false
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
