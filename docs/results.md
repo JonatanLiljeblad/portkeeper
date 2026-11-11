@@ -147,3 +147,21 @@ The parser micro-benchmark (`go test ./internal/gateway -run '^$' -bench
 InspectMCP -benchmem`) measured about 4 µs and 43 allocations per typical
 `tools/call` body on the Apple M2 above. That is the parsing cost only, not
 an end-to-end latency comparison.
+
+## Agent scenario evidence (after v0.1.0)
+
+Captured from one `make agent-demo` run on 2026-11-11, using the scripted
+planner. No model was involved; see the [scenario](agent-scenario.md) for
+what that does and does not show.
+
+The [captured run](agent-demo.txt) shows the sandbox Deployment at 0 of 1
+ready, the agent's five tool calls, the refusal of `scale_deployment`, and
+the Deployment afterwards at 1 of 1 ready with one replica and a
+`restarted-by` annotation naming the agent's ServiceAccount.
+
+The [audit trail](evidence/incident-audit.jsonl) for the agent's identity
+holds five events in order: allowed `read_runbook`, `get_deployment_status`,
+`restart_deployment`, `get_deployment_status`, then denied
+`scale_deployment`. The [decision counters](evidence/incident-decisions.prom)
+for the ops server agree: two allowed status calls, one allowed restart, one
+denied scale.

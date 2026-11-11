@@ -12,3 +12,9 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: portkeeper-other
+---
+# Holds the one Deployment the ops MCP server is allowed to act on.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: portkeeper-sandbox

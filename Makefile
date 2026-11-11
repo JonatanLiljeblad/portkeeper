@@ -1,4 +1,4 @@
-.PHONY: tidy build test e2e benchmark manifests generate toy-image kind-up kind-down install-crds run-controller run-gateway run-runbook-server apply-sample monitoring-up grafana-forward
+.PHONY: tidy build test e2e benchmark agent-demo agent-demo-live manifests generate toy-image kind-up kind-down install-crds run-controller run-gateway run-runbook-server apply-sample monitoring-up grafana-forward
 
 CONTROLLER_GEN := go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5
 
@@ -16,6 +16,16 @@ e2e:
 
 benchmark:
 	RUN_BENCHMARK=1 bash hack/e2e-kind.sh
+
+# Only the incident scenario: a scripted agent restarts a sandbox Deployment
+# and is refused a scale-up by gateway policy. No model and no API key.
+agent-demo:
+	AGENT_ONLY=1 bash hack/e2e-kind.sh
+
+# The same scenario, then again with a language model choosing the steps.
+# Requires AGENT_LLM_KEY_FILE=/path/outside/the/repo; AGENT_MODEL is optional.
+agent-demo-live:
+	AGENT_ONLY=1 AGENT_LIVE=1 bash hack/e2e-kind.sh
 
 # Regenerate config/crd/bases from the Go types in api/v1alpha1.
 manifests:

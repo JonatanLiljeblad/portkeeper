@@ -1,0 +1,24 @@
+# A backend that changes state. Its pod runs as ops-mcp, whose Role is limited
+# to the checkout Deployment in portkeeper-sandbox (see deploy/rbac.yaml).
+apiVersion: mcp.portkeeper.dev/v1alpha1
+kind: MCPServer
+metadata:
+  name: ops
+  namespace: portkeeper-demo
+spec:
+  image: portkeeper/ops:e2e
+  port: 9002
+  serviceAccountName: ops-mcp
+  tools:
+    - get_deployment_status
+    - restart_deployment
+    - scale_deployment
+  allowedServiceAccounts:
+    # The agent may look and restart. Scaling exists on the server and is
+    # discoverable, but the gateway refuses it for this identity.
+    - namespace: portkeeper-demo
+      name: mcp-incident-agent
+      allowedTools:
+        - get_deployment_status
+        - restart_deployment
+  authType: none

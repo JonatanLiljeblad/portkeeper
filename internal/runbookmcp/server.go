@@ -20,7 +20,7 @@ const (
 var runbooks embed.FS
 
 type readInput struct {
-	Topic string `json:"topic" jsonschema:"Runbook topic: gateway-routing or rate-limiting"`
+	Topic string `json:"topic" jsonschema:"Runbook topic: gateway-routing, rate-limiting or checkout-not-ready"`
 }
 
 // NewHandler serves a small, embedded documentation collection over MCP.
@@ -39,11 +39,11 @@ func NewObservedHandler(registerer prometheus.Registerer) http.Handler {
 	}, nil)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        ReadTool,
-		Description: "Read a Portkeeper operational runbook. Topics: gateway-routing, rate-limiting.",
+		Description: "Read a Portkeeper operational runbook. Topics: gateway-routing, rate-limiting, checkout-not-ready.",
 	}, metrics.observe(ReadTool, readRunbook))
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        StreamTool,
-		Description: "Read an embedded runbook with three progress notifications before completion. Topics: gateway-routing, rate-limiting.",
+		Description: "Read an embedded runbook with three progress notifications before completion. Topics: gateway-routing, rate-limiting, checkout-not-ready.",
 	}, metrics.observe(StreamTool, streamRunbook))
 
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
@@ -84,9 +84,9 @@ func streamRunbook(ctx context.Context, req *mcp.CallToolRequest, input readInpu
 
 func readRunbook(_ context.Context, _ *mcp.CallToolRequest, input readInput) (*mcp.CallToolResult, any, error) {
 	switch input.Topic {
-	case "gateway-routing", "rate-limiting":
+	case "gateway-routing", "rate-limiting", "checkout-not-ready":
 	default:
-		return nil, nil, fmt.Errorf("unknown runbook %q; choose gateway-routing or rate-limiting", input.Topic)
+		return nil, nil, fmt.Errorf("unknown runbook %q; choose gateway-routing, rate-limiting or checkout-not-ready", input.Topic)
 	}
 
 	content, err := runbooks.ReadFile("runbooks/" + input.Topic + ".md")

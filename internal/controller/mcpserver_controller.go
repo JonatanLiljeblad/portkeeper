@@ -148,6 +148,16 @@ func (r *MCPServerReconciler) reconcileDeployment(ctx context.Context, m *mcpv1a
 		container.ReadinessProbe.ProbeHandler = corev1.ProbeHandler{
 			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(m.Spec.Port)},
 		}
+		// A backend holds a Kubernetes API credential only when its resource
+		// names an identity for it.
+		account := m.Spec.ServiceAccountName
+		automount := account != ""
+		if account == "" {
+			account = "default"
+		}
+		dep.Spec.Template.Spec.ServiceAccountName = account
+		dep.Spec.Template.Spec.DeprecatedServiceAccount = account
+		dep.Spec.Template.Spec.AutomountServiceAccountToken = &automount
 		changed = !equality.Semantic.DeepEqual(before, &dep.Spec)
 		return controllerutil.SetControllerReference(m, dep, r.Scheme)
 	})

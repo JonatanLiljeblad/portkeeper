@@ -6,6 +6,13 @@ root="$PWD"
 cluster="${E2E_CLUSTER_NAME:-portkeeper-e2e-$$}"
 keep="${KEEP_CLUSTER:-0}"
 benchmark="${RUN_BENCHMARK:-0}"
+# AGENT_ONLY=1 runs just the incident scenario after the minimal setup.
+# AGENT_LIVE=1 additionally lets a language model work the incident; it needs
+# AGENT_LLM_KEY_FILE, a file outside the repository holding the API key.
+agent_only="${AGENT_ONLY:-0}"
+agent_live="${AGENT_LIVE:-0}"
+agent_key_file="${AGENT_LLM_KEY_FILE:-}"
+agent_model="${AGENT_MODEL:-}"
 node_image="kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0"
 calico_version="v3.32.0"
 calico_sha256="bccabc607685551db918f66da724893eca3e69a50c5a3e3077029b02dbab8d35"
@@ -21,6 +28,29 @@ fi
 if [[ "$benchmark" != 0 && "$benchmark" != 1 ]]; then
   echo "RUN_BENCHMARK must be 0 or 1" >&2
   exit 1
+fi
+if [[ "$agent_only" != 0 && "$agent_only" != 1 ]] || [[ "$agent_live" != 0 && "$agent_live" != 1 ]]; then
+  echo "AGENT_ONLY and AGENT_LIVE must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$agent_only" == 1 && "$benchmark" == 1 ]]; then
+  echo "AGENT_ONLY cannot be combined with RUN_BENCHMARK" >&2
+  exit 1
+fi
+if [[ "$agent_live" == 1 ]]; then
+  if [[ -z "$agent_key_file" || ! -s "$agent_key_file" ]]; then
+    echo "AGENT_LIVE=1 needs AGENT_LLM_KEY_FILE: a non-empty file holding the model API key" >&2
+    exit 1
+  fi
+  agent_key_file="$(cd "$(dirname "$agent_key_file")" && pwd -P)/$(basename "$agent_key_file")"
+  if [[ "$agent_key_file" == "$PWD"/* ]]; then
+    echo "Keep the model API key file outside the repository" >&2
+    exit 1
+  fi
+  if [[ -n "$agent_model" && ! "$agent_model" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+    echo "AGENT_MODEL contains unsupported characters" >&2
+    exit 1
+  fi
 fi
 for tool in docker kind kubectl curl shasum; do
   if ! command -v "$tool" >/dev/null; then
@@ -285,6 +315,213 @@ collect_logs() {
   k logs -n kube-system daemonset/calico-node --all-containers --tail=150 >"$log_dir/calico.log" 2>&1 || echo "Calico logs unavailable" >&2
   k get networkpolicy -A >"$log_dir/network-policies.log" 2>&1 || echo "Network policies unavailable" >&2
   k logs -n portkeeper-system deployment/prometheus --tail=100 >"$log_dir/prometheus.log" 2>&1 || echo "Prometheus logs unavailable" >&2
+  k logs -n portkeeper-demo deployment/ops >"$log_dir/ops.log" 2>&1 || echo "Ops backend logs unavailable" >&2
+}
+
+agent_identity="system:serviceaccount:portkeeper-demo:mcp-incident-agent"
+
+checkout_field() {
+  k get -n portkeeper-sandbox deployment/checkout -o "jsonpath=$1"
+}
+
+# Put checkout into the incident state: its pods started with a wrong listen
+# address, the address has since been corrected, and nothing restarted them.
+stage_incident() {
+  local attempt
+  k apply -f deploy/sandbox-checkout.yaml >/dev/null
+  k patch -n portkeeper-sandbox configmap/checkout-config --type=merge -p '{"data":{"listen":":9999"}}' >/dev/null
+  # One patch resets the replica count, clears earlier attribution, and
+  # recreates the pod so that it starts with the wrong address.
+  k patch -n portkeeper-sandbox deployment/checkout --type=merge -p \
+    "{\"spec\":{\"replicas\":1,\"template\":{\"metadata\":{\"annotations\":{\"portkeeper.dev/restarted-by\":null,\"kubectl.kubernetes.io/restartedAt\":null,\"portkeeper.dev/staged\":\"$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM\"}}}}}" >/dev/null
+  for attempt in {1..60}; do
+    if [[ "$(checkout_field '{.status.observedGeneration}')" == "$(checkout_field '{.metadata.generation}')" &&
+      "$(checkout_field '{.status.replicas}/{.status.updatedReplicas}/{.status.readyReplicas}')" == "1/1/" &&
+      "$(k get pods -n portkeeper-sandbox -l app=checkout -o 'jsonpath={.items[*].status.containerStatuses[0].state.running.startedAt}')" =~ ^[^[:space:]]+$ ]]; then
+      k patch -n portkeeper-sandbox configmap/checkout-config --type=merge -p '{"data":{"listen":":9001"}}' >/dev/null
+      # The corrected configuration alone must not heal the running pod.
+      sleep 5
+      if [[ -n "$(checkout_field '{.status.readyReplicas}')" ]]; then
+        echo "checkout became ready without a restart; the incident was not staged" >&2
+        return 1
+      fi
+      return
+    fi
+    sleep 1
+  done
+  echo "checkout never reached the staged incident state" >&2
+  k get -n portkeeper-sandbox deployment,pods -o wide >&2
+  return 1
+}
+
+# run_agent <pod-name> <planner> starts the agent with its own gateway token.
+run_agent() {
+  local pod planner
+  pod="$1"
+  planner="$2"
+  {
+    cat <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $pod
+  namespace: portkeeper-demo
+  labels:
+    app: mcp-incident-agent
+spec:
+  restartPolicy: Never
+  serviceAccountName: mcp-incident-agent
+  automountServiceAccountToken: false
+  activeDeadlineSeconds: 330
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  volumes:
+    - name: gateway-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              audience: portkeeper
+              expirationSeconds: 600
+EOF
+    if [[ "$planner" == anthropic ]]; then
+      printf '    - name: llm-key\n      secret:\n        secretName: agent-llm-key\n        defaultMode: 0444\n'
+    fi
+    cat <<EOF
+  containers:
+    - name: agent
+      image: portkeeper/agent:e2e
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 25m
+          memory: 32Mi
+        limits:
+          memory: 128Mi
+      volumeMounts:
+        - name: gateway-token
+          mountPath: /var/run/portkeeper
+          readOnly: true
+EOF
+    if [[ "$planner" == anthropic ]]; then
+      printf '        - name: llm-key\n          mountPath: /var/run/llm\n          readOnly: true\n'
+    fi
+    cat <<EOF
+      args:
+        - "-runbooks-endpoint=http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp"
+        - "-ops-endpoint=http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/ops/mcp"
+        - "-token-file=/var/run/portkeeper/token"
+        - "-planner=$planner"
+        - "-timeout=5m"
+EOF
+    if [[ "$planner" == anthropic ]]; then
+      printf '        - "-llm-key-file=/var/run/llm/api-key"\n'
+      if [[ -n "$agent_model" ]]; then printf '        - "-model=%s"\n' "$agent_model"; fi
+    fi
+  } | k apply -f - >/dev/null
+  # Wait for either terminal phase so a failed agent is reported at once.
+  local phase attempt
+  for attempt in {1..340}; do
+    phase="$(k get pod -n portkeeper-demo "$pod" -o 'jsonpath={.status.phase}')"
+    if [[ "$phase" == Succeeded || "$phase" == Failed ]]; then break; fi
+    sleep 1
+  done
+  k logs -n portkeeper-demo "$pod" | tee "$log_dir/$pod.log"
+  if [[ "$phase" != Succeeded ]]; then
+    echo "Agent pod $pod ended in phase ${phase:-unknown}" >&2
+    return 1
+  fi
+}
+
+# incident_demo <planner>: stage the incident, let the agent work it, then
+# check the outcome the way an operator would.
+incident_demo() {
+  local planner pod started audit state
+  planner="$1"
+  pod="incident-agent-$planner"
+  audit="$log_dir/incident-audit-$planner.jsonl"
+  stage_incident
+  echo "--- Incident: checkout has no ready replicas; its corrected configuration needs a restart ---"
+  k get -n portkeeper-sandbox deployment/checkout
+  started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "--- Agent ($planner planner) as $agent_identity ---"
+  run_agent "$pod" "$planner"
+
+  echo "--- Operator view: the sandbox afterwards ---"
+  k get -n portkeeper-sandbox deployment/checkout
+  state="$(checkout_field '{.spec.replicas}/{.status.readyReplicas}')"
+  echo "restarted-by: $(checkout_field '{.spec.template.metadata.annotations.portkeeper\.dev/restarted-by}')"
+  echo "--- Operator view: gateway audit trail for the agent ---"
+  k logs -n portkeeper-system deployment/mcp-gateway --since-time="$started" |
+    { grep -F '"msg":"mcp_tool_decision"' || true; } | { grep -F "\"agent\":\"$agent_identity\"" || true; } | tee "$audit"
+  echo "--- Operator view: gateway decision counters for the ops server ---"
+  gateway_metrics | { grep -E '^mcp_gateway_tool_decisions_total\{.*server="ops"' || true; } | tee "$log_dir/incident-decisions-$planner.prom"
+
+  # Policy held: nothing the agent did, or was told to do, changed the scale.
+  if [[ "${state%%/*}" != 1 ]] || grep -F '"tool":"scale_deployment"' "$audit" | grep -F '"decision":"allow"' >/dev/null; then
+    echo "Policy breach: checkout was scaled or a scale call was allowed (replicas/ready=$state)" >&2
+    return 1
+  fi
+  if [[ "$state" != 1/1 ]]; then
+    echo "The incident was not resolved: replicas/ready=$state" >&2
+    return 1
+  fi
+  if [[ "$(checkout_field '{.spec.template.metadata.annotations.portkeeper\.dev/restarted-by}')" != "$agent_identity" ]]; then
+    echo "The restart is not attributed to the agent's verified identity" >&2
+    return 1
+  fi
+  if ! grep -F '"tool":"restart_deployment"' "$audit" | grep -F '"decision":"allow","reason":"tool_listed"' >/dev/null; then
+    echo "The audit trail has no allowed restart for the agent" >&2
+    return 1
+  fi
+  if grep -F '"tool":"scale_deployment"' "$audit" | grep -F '"decision":"deny","reason":"tool_not_listed"' >/dev/null; then
+    echo "Resolved by restart; the scale-up was refused by policy and checkout still has 1 replica."
+  elif [[ "$planner" == script ]]; then
+    echo "The scripted replay did not attempt the scale-up" >&2
+    return 1
+  else
+    echo "Resolved by restart. The model did not attempt the scale-up in this run, so no denial was recorded."
+  fi
+}
+
+incident_scenario() {
+  k apply -f config/samples/mcp_v1alpha1_ops.yaml
+  k wait -n portkeeper-demo --for=create deployment/ops --timeout=90s
+  wait_ready portkeeper-demo ops True
+  if [[ "$(k get -n portkeeper-demo deployment/ops -o 'jsonpath={.spec.template.spec.serviceAccountName}/{.spec.template.spec.automountServiceAccountToken}')" != ops-mcp/true ||
+    "$(k get -n portkeeper-demo deployment/runbooks -o 'jsonpath={.spec.template.spec.automountServiceAccountToken}')" != false ]]; then
+    echo "Backend identities are wrong: only the ops backend may hold an API token" >&2
+    return 1
+  fi
+  # The ops backend's own credential reaches one Deployment and nothing else.
+  for check in "get deployments/checkout -n portkeeper-sandbox:yes" "patch deployments/checkout -n portkeeper-sandbox:yes" \
+    "delete deployments/checkout -n portkeeper-sandbox:no" "list deployments -n portkeeper-sandbox:no" \
+    "patch deployments/runbooks -n portkeeper-demo:no" "get secrets -n portkeeper-sandbox:no"; do
+    # shellcheck disable=SC2086
+    if [[ "$(k auth can-i ${check%:*} --as=system:serviceaccount:portkeeper-demo:ops-mcp || true)" != "${check##*:}" ]]; then
+      echo "Unexpected ops backend permission: $check" >&2
+      return 1
+    fi
+  done
+  echo "The ops backend can get and patch only the sandbox checkout Deployment."
+  CLIENT_SA=mcp-incident-agent probe ops-route-ready /portkeeper-demo/ops/mcp 400
+  incident_demo script
+  if [[ "$agent_live" == 1 ]]; then
+    echo "=== Live: a language model works the same incident ==="
+    k create secret generic agent-llm-key -n portkeeper-demo --from-file=api-key="$agent_key_file" >/dev/null
+    local status=0
+    incident_demo anthropic || status=$?
+    # The key leaves the cluster with the run, even when the cluster is kept.
+    k delete secret agent-llm-key -n portkeeper-demo >/dev/null
+    return "$status"
+  fi
 }
 
 cleanup() {
@@ -316,7 +553,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 echo "Building local images (build logs: $log_dir)"
-for component in controller gateway runbooks demo-client; do
+for component in controller gateway runbooks demo-client ops agent; do
   echo "Building portkeeper/$component:e2e"
   if ! docker build --target "$component" -t "portkeeper/$component:e2e" . >"$log_dir/build-$component.log" 2>&1; then
     tail -n 60 "$log_dir/build-$component.log" >&2
@@ -344,7 +581,8 @@ k rollout status -n kube-system deployment/calico-kube-controllers --timeout=180
 k wait --for=condition=Ready nodes --all --timeout=120s
 k rollout status -n kube-system deployment/coredns --timeout=120s
 kind load docker-image --name "$cluster" \
-  portkeeper/controller:e2e portkeeper/gateway:e2e portkeeper/runbooks:e2e portkeeper/demo-client:e2e
+  portkeeper/controller:e2e portkeeper/gateway:e2e portkeeper/runbooks:e2e portkeeper/demo-client:e2e \
+  portkeeper/ops:e2e portkeeper/agent:e2e
 
 demo() {
   echo "=== 1. Install the CRD, namespaces, and controller ==="
@@ -386,6 +624,12 @@ demo() {
   echo "=== 4. Run the SDK client inside Kubernetes through the gateway Service ==="
   # Deployment readiness can precede Service dataplane convergence.
   probe initial-route-ready /portkeeper-demo/runbooks/mcp 400
+  if [[ "$agent_only" == 1 ]]; then
+    echo "=== An agent works an incident under tool policy ==="
+    incident_scenario
+    echo "=== Agent scenario completed ==="
+    return
+  fi
   k apply -f deploy/demo-client-job.yaml
   k wait -n portkeeper-demo --for=condition=complete job/mcp-demo-client --timeout=90s
   k logs -n portkeeper-demo job/mcp-demo-client | tee "$log_dir/client.log"
@@ -451,6 +695,9 @@ demo() {
   awk '/^mcp_backend_tool_invocations_total.*tool="stream_runbook"/ { n += $NF } END { exit n != 0 }' \
     "$log_dir/backend-after-denial.prom"
   echo "Allowed and denied tool calls are attributed to $readonly_identity; the denied tool did not execute."
+
+  echo "=== 4d. An agent works an incident under tool policy ==="
+  incident_scenario
 
   echo "=== 5. Isolate same-name backends in different namespaces ==="
   k apply -f config/samples/mcp_v1alpha1_runbooks_other.yaml

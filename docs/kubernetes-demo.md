@@ -65,7 +65,10 @@ The captured walkthrough shows these stages:
    it reads a runbook, is denied `stream_runbook` with a JSON-RPC error while
    its session stays usable, and both decisions appear in the gateway's audit
    log and decision metrics. The backend's execution counter confirms the
-   denied tool never ran.
+   denied tool never ran. Finally an agent works an incident: with the same
+   kind of policy it restarts a sandbox Deployment and is refused a scale-up.
+   See the [agent scenario](agent-scenario.md); `make agent-demo` runs only
+   that part.
 5. Declare another `runbooks` server in `portkeeper-other`. Call it by
    namespace, observe 409 for the ambiguous old URL and 404 for a missing
    server. Verify denied identities cannot access the other namespace.

@@ -35,6 +35,15 @@ type MCPServerSpec struct {
 	// AuthSecretRef reserves a backend credential Secret; it is not consumed.
 	// +optional
 	AuthSecretRef string `json:"authSecretRef,omitempty"`
+
+	// ServiceAccountName is the ServiceAccount, in the MCPServer's namespace,
+	// that the backend pod runs as. Its token is mounted only when this is
+	// set. When omitted the pod uses the namespace default account and no
+	// Kubernetes API token is mounted.
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 }
 
 // ServiceAccountReference identifies a client ServiceAccount in this cluster.

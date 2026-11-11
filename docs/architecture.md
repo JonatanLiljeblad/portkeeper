@@ -77,7 +77,10 @@
 ## Reconciliation and readiness
 
 The controller preserves Kubernetes defaults while updating its managed
-image, port, replica count, labels, and TCP readiness probe. It will only
+image, port, replica count, labels, pod identity, and TCP readiness probe.
+The pod runs as `spec.serviceAccountName` with its API token mounted, or,
+when that field is omitted, as the namespace default account with no token
+mounted. It will only
 mutate existing child resources controlled by that MCPServer's UID. Status
 is patched only when it changes, preserving condition transition timestamps
 and avoiding self-triggered reconciliation loops.

@@ -71,6 +71,23 @@ and provide the real, read-only MCP demo backend using the official Go SDK.
 Its documentation is embedded at build time; inputs must not permit arbitrary
 filesystem reads.
 
+`internal/opsmcp` and `hack/ops-mcp-server` are the state-changing demo
+backend: status, restart and scale for Deployments in the single namespace
+given by `OPS_NAMESPACE`, only when labelled
+`portkeeper.dev/agent-managed=true`. Keep its RBAC to `get`/`patch` on the
+named sandbox Deployment. It records the gateway-set `X-Agent-ID` in the
+`portkeeper.dev/restarted-by` annotation. `spec.serviceAccountName` selects a
+backend's pod identity; the controller mounts an API token only when it is
+set, and otherwise forces `automountServiceAccountToken: false`.
+
+`internal/agent` and `hack/incident-agent` run the incident scenario. The
+`Planner` is either the deterministic `IncidentScript` (used by CI, no model)
+or `Anthropic` (Messages API). Tool calls are never retried; model calls may
+be. The model key is read from a file and must never be logged, placed on a
+command line, or stored in the repository. Assistant turns are replayed to
+the API verbatim. `make agent-demo` runs only this scenario;
+`make agent-demo-live` needs `AGENT_LLM_KEY_FILE`. See docs/agent-scenario.md.
+
 ## Commands
 
 ```bash
@@ -115,7 +132,7 @@ It creates its own named cluster and kubeconfig, refuses existing cluster
 names, captures logs, and deletes the cluster it created. `KEEP_CLUSTER=1`
 retains it and prints exact access/cleanup commands. See
 `docs/kubernetes-demo.md`. The root Dockerfile's `controller`, `gateway`,
-`runbooks`, and `demo-client` targets produce the four local images.
+`runbooks`, `demo-client`, `ops`, and `agent` targets produce the six local images.
 The workflow also covers duplicate names, broken image/port updates,
 recovery, child recreation, and real Kubernetes garbage collection.
 Its separate `deploy/kind-e2e-config.yaml` disables kind's default CNI;

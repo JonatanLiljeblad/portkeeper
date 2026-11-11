@@ -1,0 +1,3 @@
+mcp_gateway_tool_decisions_total{decision="allow",namespace="portkeeper-demo",server="ops",tool="get_deployment_status"} 2
+mcp_gateway_tool_decisions_total{decision="allow",namespace="portkeeper-demo",server="ops",tool="restart_deployment"} 1
+mcp_gateway_tool_decisions_total{decision="deny",namespace="portkeeper-demo",server="ops",tool="scale_deployment"} 1

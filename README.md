@@ -3,7 +3,7 @@
 ![A Kubernetes-native gateway and registry for MCP (Model Context Protocol) servers.](./assets/banner.png)
 
 **Experimental:** v0.1.0 is released; `main` carries v0.2 work in progress
-(per-tool authorization and audit). A reproducible single-replica demo, not
+(per-tool authorization, audit, and an agent scenario). A reproducible single-replica demo, not
 a production-ready or highly available deployment.
 [v0.1.0 release and evidence](https://github.com/JonatanLiljeblad/portkeeper/releases/tag/v0.1.0).
 
@@ -42,6 +42,20 @@ it: one allowed, one denied, one allowed a single tool and refused another.
 It takes about eight minutes and deletes the cluster afterwards. The
 [captured run](docs/demo.txt) shows the output without running anything.
 
+### An agent under policy
+
+```bash
+make agent-demo
+```
+
+An agent works an incident on a real Deployment. Its runbook says to restart
+the workload and then scale it up. The gateway allows this agent to restart
+and refuses the scale-up, so the workload recovers with its replica count
+unchanged, and the audit trail shows both decisions against the agent's
+verified identity. This run uses a scripted agent and needs no API key;
+`make agent-demo-live` lets a language model choose the steps. See the
+[scenario](docs/agent-scenario.md) and a [captured run](docs/agent-demo.txt).
+
 See [PLAN.md](./PLAN.md) for the full design rationale and roadmap, and
 [docs/architecture.md](./docs/architecture.md) for how the pieces fit
 together.
@@ -57,10 +71,14 @@ internal/
   controller/          # reconcile loop: MCPServer -> Deployment + Service
   gateway/             # authentication, policy, request inspection, routing, metrics
   runbookmcp/          # read-only MCP demo backend (official Go SDK)
+  opsmcp/              # state-changing MCP demo backend, scoped to one Deployment
+  agent/               # tool-using agent: scripted or model-driven planner
   democlient/          # MCP SDK client used by the demo, probes and benchmark
 hack/
-  e2e-kind.sh          # the make e2e / make benchmark workflow
+  e2e-kind.sh          # the make e2e / benchmark / agent-demo workflow
   runbook-mcp-server/  # entrypoint for the demo backend
+  ops-mcp-server/      # entrypoint for the ops backend
+  incident-agent/      # entrypoint for the agent
   mcp-client/          # entrypoint for the demo client
   toy-mcp-server/      # legacy non-MCP HTTP backend (separate Go module)
 config/
@@ -119,7 +137,7 @@ make e2e
 make benchmark
 ```
 
-This builds four local images, creates an isolated kind cluster, installs the
+This builds six local images, creates an isolated kind cluster, installs the
 policy-enforcing CNI, controller and gateway with their ServiceAccounts/RBAC,
 declares the runbook
 backend, and runs a real MCP client Job. The client discovers `read_runbook`
@@ -154,9 +172,9 @@ Legacy `/<server-name>/<endpoint>` routes work when the server name is unique
 across the cluster; ambiguous names return **409 Conflict** rather than
 selecting an arbitrary backend. Namespaced toy routes also work.
 
-The read-only demo backend embeds two operational runbooks and exposes
+The read-only demo backend embeds three operational runbooks and exposes
 `read_runbook` and a progress-streaming `stream_runbook`, with the topics
-`gateway-routing` and `rate-limiting`. It
+`gateway-routing`, `rate-limiting` and `checkout-not-ready`. It
 cannot read arbitrary files or execute commands. To run the backend alone:
 
 ```bash

@@ -116,6 +116,15 @@ spec:
                   container.
                 format: int32
                 type: integer
+              serviceAccountName:
+                description: |-
+                  ServiceAccountName is the ServiceAccount, in the MCPServer's namespace,
+                  that the backend pod runs as. Its token is mounted only when this is
+                  set. When omitted the pod uses the namespace default account and no
+                  Kubernetes API token is mounted.
+                maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                type: string
               tools:
                 description: Tools is discovery metadata; HTTP routing resolves the
                   server, not tools.

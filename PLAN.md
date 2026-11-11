@@ -237,7 +237,60 @@ a log stream without durable or tamper-evident storage; an allowed event
 does not prove execution. The cost of inspection is measured only by a
 parser micro-benchmark; the end-to-end figure is refreshed in checkpoint 10.
 
-### 7. Standard MCP authorization (OAuth 2.1 / OIDC)
+### 7. Real agent scenario
+
+Ordering: moved ahead of OAuth after checkpoint 6. The scenario depends only
+on tool policy and audit, which exist; OAuth is larger, riskier, and not a
+dependency of the demo.
+
+Status: scripted scenario complete and proven in kind. The live model run
+and the recording are outstanding; they need a model API key at run time.
+
+Decision: the headline demo uses a real LLM agent, through the Anthropic
+Messages API. CI runs a deterministic
+scripted replay of the same tool sequence, so the pipeline needs no API key
+and no model call. The model credential is supplied at run time and never
+appears in the repository, images, logs, or artifacts.
+
+- Add a second MCP backend with a state-changing tool that acts only on a
+  sandboxed demo resource, so policy has something meaningful to block.
+- Build an incident scenario: the agent reads a runbook, inspects state, and
+  attempts a remediation. One step is permitted and one is denied by policy.
+- Show the outcome from the operator's side: the audit trail and dashboard
+  explain what the agent did and what it was refused.
+- Record the run as the project's primary demo.
+
+Acceptance: `make` targets run the scripted scenario in kind and, with a
+key supplied, the live agent scenario; the denied action is visible to the
+agent as a tool error and to the operator in the audit trail; the recording
+matches a reproducible run.
+
+Delivered: an `ops` MCP backend (status, restart, scale) acting on a real
+Deployment in `portkeeper-sandbox`, bounded by a Role on that one Deployment,
+a fixed namespace and an opt-in label. `spec.serviceAccountName` gives a
+backend its pod identity; backends without it no longer receive an API token.
+An agent (`internal/agent`) with a scripted planner and an Anthropic Messages
+API planner, limited in steps, result size and output tokens. `make
+agent-demo` runs the scenario alone and `make e2e` runs it as step 4d: the
+agent restarts `checkout`, is refused the scale-up, and the workflow asserts
+the workload recovered with one replica, the restart is attributed to the
+agent's verified identity on the Deployment, and the audit trail holds the
+allowed restart and the denied scale. `docs/agent-scenario.md` and a captured
+run document it.
+
+Not yet met: the Anthropic planner is tested against a local stand-in for
+the API but has not been run against the real API, so the acceptance clause
+"with a key supplied, the live agent scenario" is unverified and no recording
+exists. `make agent-demo-live` is the command; its model-driven result may
+differ from the script, including not attempting the scale-up.
+
+Remaining limitations: one scenario and one policy, not an evaluation of
+model behaviour; the ops backend exports no execution metrics; the dashboard
+shows the ops decisions only in the full `make e2e` run, which installs
+monitoring; adopting the new controller rolls every existing backend once
+because the pod template gains an explicit token setting.
+
+### 8. Standard MCP authorization (OAuth 2.1 / OIDC)
 
 Status: not started.
 
@@ -259,28 +312,6 @@ Acceptance: an unmodified MCP client completes discovery and login against
 the in-cluster identity provider and calls a tool through the gateway; a
 token minted for another audience is rejected; the ServiceAccount e2e
 scenarios still pass.
-
-### 8. Real agent scenario
-
-Status: not started.
-
-Decision: the headline demo uses a real LLM agent. CI runs a deterministic
-scripted replay of the same tool sequence, so the pipeline needs no API key
-and no model call. The model credential is supplied at run time and never
-appears in the repository, images, logs, or artifacts.
-
-- Add a second MCP backend with a state-changing tool that acts only on a
-  sandboxed demo resource, so policy has something meaningful to block.
-- Build an incident scenario: the agent reads a runbook, inspects state, and
-  attempts a remediation. One step is permitted and one is denied by policy.
-- Show the outcome from the operator's side: the audit trail and dashboard
-  explain what the agent did and what it was refused.
-- Record the run as the project's primary demo.
-
-Acceptance: `make` targets run the scripted scenario in kind and, with a
-key supplied, the live agent scenario; the denied action is visible to the
-agent as a tool error and to the operator in the audit trail; the recording
-matches a reproducible run.
 
 ### 9. Production shape
 

@@ -247,6 +247,30 @@ func TestManagedFieldsAndIdempotence(t *testing.T) {
 	assertStatus(t, c, "Ready", true)
 }
 
+func TestBackendIdentityAndTokenMount(t *testing.T) {
+	r, c := setup(t, newServer())
+	for _, tt := range []struct{ spec, account string }{
+		{"", "default"},
+		{"ops-mcp", "ops-mcp"},
+		{"", "default"},
+	} {
+		m := &mcpv1alpha1.MCPServer{}
+		get(t, c, m, "test")
+		m.Spec.ServiceAccountName = tt.spec
+		if err := c.Update(context.Background(), m); err != nil {
+			t.Fatal(err)
+		}
+		reconcile(t, r)
+		dep := &appsv1.Deployment{}
+		get(t, c, dep, "test")
+		pod := dep.Spec.Template.Spec
+		if pod.ServiceAccountName != tt.account || pod.AutomountServiceAccountToken == nil ||
+			*pod.AutomountServiceAccountToken != (tt.spec != "") {
+			t.Fatalf("spec %q: account=%q automount=%v", tt.spec, pod.ServiceAccountName, pod.AutomountServiceAccountToken)
+		}
+	}
+}
+
 func TestPreservesTransitionTime(t *testing.T) {
 	r, c := setup(t, newServer())
 	reconcile(t, r)

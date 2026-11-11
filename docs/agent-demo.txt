@@ -1,0 +1,53 @@
+=== An agent works an incident under tool policy ===
+mcpserver.mcp.portkeeper.dev/ops created
+deployment.apps/ops condition met
+mcpserver.mcp.portkeeper.dev/ops condition met
+mcpserver.mcp.portkeeper.dev/ops condition met
+The ops backend can get and patch only the sandbox checkout Deployment.
+pod/ops-route-ready created
+pod/ops-route-ready condition met
+Observed HTTP 400 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/ops/mcp
+--- Incident: checkout has no ready replicas; its corrected configuration needs a restart ---
+NAME       READY   UP-TO-DATE   AVAILABLE   AGE
+checkout   0/1     1            0           8s
+--- Agent (script planner) as system:serviceaccount:portkeeper-demo:mcp-incident-agent ---
+tool   runbooks__read_runbook
+tool   runbooks__stream_runbook
+tool   ops__get_deployment_status
+tool   ops__restart_deployment
+tool   ops__scale_deployment
+task   The checkout Deployment in the sandbox has no ready replicas. Read the checkout-not-ready runbook and resolve the incident by following it.
+call   runbooks__read_runbook {"topic":"checkout-not-ready"}
+result ok # Checkout not ready ...
+call   ops__get_deployment_status {"name":"checkout"}
+result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0,"ready":false}
+call   ops__restart_deployment {"name":"checkout"}
+result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0,"ready":false,"lastRestartedAt":"2026-11-11T18:10:49Z","lastRestarte ...
+call   ops__get_deployment_status {"name":"checkout","waitSeconds":60}
+result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1,"ready":true,"lastRestartedAt":"2026-11-11T18:10:49Z","lastRestarted ...
+call   ops__scale_deployment {"name":"checkout","replicas":3}
+result DENIED by gateway policy: tool "scale_deployment" is not permitted for this client by gateway policy
+final  Scripted replay finished.
+       runbooks__read_runbook: completed
+       ops__get_deployment_status: completed
+       ops__restart_deployment: completed
+       ops__get_deployment_status: completed
+       ops__scale_deployment: refused by gateway policy
+       Stopped at ops__scale_deployment as the runbook requires; a human must decide the next step.
+usage  tool_calls=5 denied=1 model_calls=0 input_tokens=0 output_tokens=0
+--- Operator view: the sandbox afterwards ---
+NAME       READY   UP-TO-DATE   AVAILABLE   AGE
+checkout   1/1     1            1           13s
+restarted-by: system:serviceaccount:portkeeper-demo:mcp-incident-agent
+--- Operator view: gateway audit trail for the agent ---
+{"time":"2026-11-11T18:10:49.335062179Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"runbooks","tool":"read_runbook","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-11T18:10:49.336602012Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"get_deployment_status","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-11T18:10:49.522459346Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"restart_deployment","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-11T18:10:49.720525429Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"get_deployment_status","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-11T18:10:50.730124846Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"scale_deployment","decision":"deny","reason":"tool_not_listed"}
+--- Operator view: gateway decision counters for the ops server ---
+mcp_gateway_tool_decisions_total{decision="allow",namespace="portkeeper-demo",server="ops",tool="get_deployment_status"} 2
+mcp_gateway_tool_decisions_total{decision="allow",namespace="portkeeper-demo",server="ops",tool="restart_deployment"} 1
+mcp_gateway_tool_decisions_total{decision="deny",namespace="portkeeper-demo",server="ops",tool="scale_deployment"} 1
+Resolved by restart; the scale-up was refused by policy and checkout still has 1 replica.
+=== Agent scenario completed ===

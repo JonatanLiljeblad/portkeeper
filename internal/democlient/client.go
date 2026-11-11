@@ -47,6 +47,12 @@ func (t credentialTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return http.DefaultTransport.RoundTrip(out)
 }
 
+// HTTPClient returns a client that attaches the gateway credential to every
+// request, rereading the token file to follow rotation.
+func HTTPClient(credentials Credentials) *http.Client {
+	return httpClient(credentials)
+}
+
 func httpClient(credentials Credentials) *http.Client {
 	return &http.Client{
 		Transport: credentialTransport{credentials: credentials},

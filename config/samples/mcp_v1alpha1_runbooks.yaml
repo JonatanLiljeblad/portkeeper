@@ -12,6 +12,10 @@ spec:
       name: mcp-readonly-client
       allowedTools:
         - read_runbook
+    - namespace: portkeeper-demo
+      name: mcp-incident-agent
+      allowedTools:
+        - read_runbook
   image: portkeeper/runbooks:e2e
   port: 9001
   tools:

@@ -4,6 +4,7 @@ customresourcedefinition.apiextensions.k8s.io/mcpservers.mcp.portkeeper.dev cond
 namespace/portkeeper-system created
 namespace/portkeeper-demo created
 namespace/portkeeper-other created
+namespace/portkeeper-sandbox created
 networkpolicy.networking.k8s.io/mcp-backends-gateway-only created
 networkpolicy.networking.k8s.io/mcp-backends-gateway-only created
 clusterrole.rbac.authorization.k8s.io/portkeeper-controller-role created
@@ -11,6 +12,10 @@ clusterrole.rbac.authorization.k8s.io/portkeeper-gateway-role created
 serviceaccount/mcp-demo-client created
 serviceaccount/mcp-denied-client created
 serviceaccount/mcp-readonly-client created
+serviceaccount/mcp-incident-agent created
+serviceaccount/ops-mcp created
+role.rbac.authorization.k8s.io/ops-mcp-checkout created
+rolebinding.rbac.authorization.k8s.io/ops-mcp-checkout created
 serviceaccount/portkeeper-controller created
 serviceaccount/mcp-gateway created
 clusterrolebinding.rbac.authorization.k8s.io/portkeeper-controller created
@@ -31,8 +36,8 @@ mcpserver.mcp.portkeeper.dev/runbooks   portkeeper/runbooks:e2e   Ready
 NAME                       READY   UP-TO-DATE   AVAILABLE   AGE
 deployment.apps/runbooks   1/1     1            1           2s
 
-NAME                   TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
-service/runbooks-svc   ClusterIP   10.96.32.128   <none>        9001/TCP   2s
+NAME                   TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+service/runbooks-svc   ClusterIP   10.96.228.121   <none>        9001/TCP   2s
 === 3. Start the gateway; verify registry and TokenReview RBAC ===
 deployment.apps/mcp-gateway created
 service/mcp-gateway created
@@ -189,6 +194,58 @@ pod/readonly-denied condition met
 Tool stream_runbook denied by gateway policy (JSON-RPC -32090): tool "stream_runbook" is not permitted for this client by gateway policy
 Session still usable after the denial.
 Allowed and denied tool calls are attributed to system:serviceaccount:portkeeper-demo:mcp-readonly-client; the denied tool did not execute.
+=== 4d. An agent works an incident under tool policy ===
+mcpserver.mcp.portkeeper.dev/ops created
+deployment.apps/ops condition met
+mcpserver.mcp.portkeeper.dev/ops condition met
+mcpserver.mcp.portkeeper.dev/ops condition met
+The ops backend can get and patch only the sandbox checkout Deployment.
+pod/ops-route-ready created
+pod/ops-route-ready condition met
+Observed HTTP 400 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/ops/mcp
+--- Incident: checkout has no ready replicas; its corrected configuration needs a restart ---
+NAME       READY   UP-TO-DATE   AVAILABLE   AGE
+checkout   0/1     1            0           8s
+--- Agent (script planner) as system:serviceaccount:portkeeper-demo:mcp-incident-agent ---
+tool   runbooks__read_runbook
+tool   runbooks__stream_runbook
+tool   ops__get_deployment_status
+tool   ops__restart_deployment
+tool   ops__scale_deployment
+task   The checkout Deployment in the sandbox has no ready replicas. Read the checkout-not-ready runbook and resolve the incident by following it.
+call   runbooks__read_runbook {"topic":"checkout-not-ready"}
+result ok # Checkout not ready ...
+call   ops__get_deployment_status {"name":"checkout"}
+result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0,"ready":false}
+call   ops__restart_deployment {"name":"checkout"}
+result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0,"ready":false,"lastRestartedAt":"2026-11-11T18:19:03Z","lastRestarte ...
+call   ops__get_deployment_status {"name":"checkout","waitSeconds":60}
+result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1,"ready":true,"lastRestartedAt":"2026-11-11T18:19:03Z","lastRestarted ...
+call   ops__scale_deployment {"name":"checkout","replicas":3}
+result DENIED by gateway policy: tool "scale_deployment" is not permitted for this client by gateway policy
+final  Scripted replay finished.
+       runbooks__read_runbook: completed
+       ops__get_deployment_status: completed
+       ops__restart_deployment: completed
+       ops__get_deployment_status: completed
+       ops__scale_deployment: refused by gateway policy
+       Stopped at ops__scale_deployment as the runbook requires; a human must decide the next step.
+usage  tool_calls=5 denied=1 model_calls=0 input_tokens=0 output_tokens=0
+--- Operator view: the sandbox afterwards ---
+NAME       READY   UP-TO-DATE   AVAILABLE   AGE
+checkout   1/1     1            1           14s
+restarted-by: system:serviceaccount:portkeeper-demo:mcp-incident-agent
+--- Operator view: gateway audit trail for the agent ---
+{"time":"2026-11-11T18:19:03.361971046Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"runbooks","tool":"read_runbook","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-11T18:19:03.363685463Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"get_deployment_status","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-11T18:19:03.549263088Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"restart_deployment","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-11T18:19:03.74668138Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"get_deployment_status","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-11T18:19:05.764808214Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"scale_deployment","decision":"deny","reason":"tool_not_listed"}
+--- Operator view: gateway decision counters for the ops server ---
+mcp_gateway_tool_decisions_total{decision="allow",namespace="portkeeper-demo",server="ops",tool="get_deployment_status"} 2
+mcp_gateway_tool_decisions_total{decision="allow",namespace="portkeeper-demo",server="ops",tool="restart_deployment"} 1
+mcp_gateway_tool_decisions_total{decision="deny",namespace="portkeeper-demo",server="ops",tool="scale_deployment"} 1
+Resolved by restart; the scale-up was refused by policy and checkout still has 1 replica.
 === 5. Isolate same-name backends in different namespaces ===
 mcpserver.mcp.portkeeper.dev/runbooks created
 mcpserver.mcp.portkeeper.dev/runbooks condition met
@@ -267,19 +324,19 @@ pod/portkeeper-demo-service-after condition met
 Observed HTTP 400 at http://runbooks-svc.portkeeper-demo.svc.cluster.local:9001/mcp
 pod/portkeeper-demo-pod-before created
 pod/portkeeper-demo-pod-before condition met
-Observed HTTP 400 at http://192.168.47.70:9001/mcp
+Observed HTTP 400 at http://192.168.20.6:9001/mcp
 pod/portkeeper-demo-pod-blocked created
 pod/portkeeper-demo-pod-blocked condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.47.70:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.20.6:9001/mcp
 pod/portkeeper-demo-pod-after created
 pod/portkeeper-demo-pod-after condition met
-Observed HTTP 400 at http://192.168.47.70:9001/mcp
+Observed HTTP 400 at http://192.168.20.6:9001/mcp
 pod/portkeeper-demo-label-only created
 pod/portkeeper-demo-label-only condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.47.70:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.20.6:9001/mcp
 pod/portkeeper-demo-namespace-only created
 pod/portkeeper-demo-namespace-only condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.47.70:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.20.6:9001/mcp
 pod/portkeeper-demo-gateway-allowed created
 pod/portkeeper-demo-gateway-allowed condition met
 Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
@@ -338,19 +395,19 @@ pod/portkeeper-other-service-after condition met
 Observed HTTP 400 at http://runbooks-svc.portkeeper-other.svc.cluster.local:9001/mcp
 pod/portkeeper-other-pod-before created
 pod/portkeeper-other-pod-before condition met
-Observed HTTP 400 at http://192.168.47.87:9001/mcp
+Observed HTTP 400 at http://192.168.20.29:9001/mcp
 pod/portkeeper-other-pod-blocked created
 pod/portkeeper-other-pod-blocked condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.47.87:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.20.29:9001/mcp
 pod/portkeeper-other-pod-after created
 pod/portkeeper-other-pod-after condition met
-Observed HTTP 400 at http://192.168.47.87:9001/mcp
+Observed HTTP 400 at http://192.168.20.29:9001/mcp
 pod/portkeeper-other-label-only created
 pod/portkeeper-other-label-only condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.47.87:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.20.29:9001/mcp
 pod/portkeeper-other-namespace-only created
 pod/portkeeper-other-namespace-only condition met
-Network probe passed: DNS resolved; TCP blocked=true at http://192.168.47.87:9001/mcp
+Network probe passed: DNS resolved; TCP blocked=true at http://192.168.20.29:9001/mcp
 pod/portkeeper-other-gateway-allowed created
 pod/portkeeper-other-gateway-allowed condition met
 Connected to http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-other/runbooks/mcp
@@ -468,13 +525,13 @@ MCP discovery and tool call completed.
 === 6a. Delete a backend pod; capture downtime, conditions, metrics and recovery ===
 pod/pod-loss-client created
 pod/pod-loss-client condition met
-node/portkeeper-e2e-9806-control-plane cordoned
-pod "runbooks-8f45d4b8f-9297t" deleted from portkeeper-demo namespace
+node/portkeeper-e2e-53199-control-plane cordoned
+pod "runbooks-64ff4cf6c7-j7pch" deleted from portkeeper-demo namespace
 mcpserver.mcp.portkeeper.dev/runbooks condition met
 mcpserver.mcp.portkeeper.dev/runbooks condition met
 pod/pod-loss-client condition met
 Observed HTTP 503 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
-node/portkeeper-e2e-9806-control-plane uncordoned
+node/portkeeper-e2e-53199-control-plane uncordoned
 Waiting for deployment "runbooks" rollout to finish: 0 of 1 updated replicas are available...
 deployment "runbooks" successfully rolled out
 mcpserver.mcp.portkeeper.dev/runbooks condition met
@@ -529,7 +586,7 @@ and forward the backend Service's port to the same local port.
 
 MCP discovery and tool call completed.
 Pod loss produced Ready=False and HTTP 503; a replacement pod restored Ready=True and MCP execution.
-node/portkeeper-e2e-9806-control-plane already uncordoned
+node/portkeeper-e2e-53199-control-plane already uncordoned
 === 7. Recreate owned resources and garbage-collect deleted servers ===
 deployment.apps "runbooks" deleted from portkeeper-demo namespace
 service "runbooks-svc" deleted from portkeeper-demo namespace
@@ -641,4 +698,26 @@ When running the gateway on the host, set `GATEWAY_BACKEND_HOST=localhost`
 and forward the backend Service's port to the same local port.
 
 MCP discovery and tool call completed.
+=== 8. Measure direct and authenticated gateway MCP traffic ===
+deployment.apps/mcp-gateway env updated
+Waiting for deployment "mcp-gateway" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "mcp-gateway" rollout to finish: 1 old replicas are pending termination...
+deployment "mcp-gateway" successfully rolled out
+mcpserver.mcp.portkeeper.dev/runbooks patched
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+serviceaccount/mcp-benchmark-client created
+job.batch/mcp-benchmark created
+pod/benchmark-policy-ready created
+pod/benchmark-policy-ready condition met
+Observed HTTP 400 at http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/runbooks/mcp
+job.batch/mcp-benchmark patched
+Raw benchmark report and environment captured in /Users/jonatanliljeblad/repos/portkeeper/artifacts/e2e.IbBYSw/logs.
+mcpserver.mcp.portkeeper.dev/runbooks configured
+deployment.apps/mcp-gateway env updated
+Waiting for deployment "mcp-gateway" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "mcp-gateway" rollout to finish: 1 old replicas are pending termination...
+deployment "mcp-gateway" successfully rolled out
+mcpserver.mcp.portkeeper.dev/runbooks condition met
+mcpserver.mcp.portkeeper.dev/runbooks condition met
 === Kubernetes MCP workflow completed ===

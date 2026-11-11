@@ -20,6 +20,48 @@ metadata:
   namespace: portkeeper-demo
 automountServiceAccountToken: false
 ---
+# The incident agent: may read runbooks, inspect and restart, but not scale.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-incident-agent
+  namespace: portkeeper-demo
+automountServiceAccountToken: false
+---
+# Identity of the ops MCP backend pod. The controller mounts its token because
+# the MCPServer names it; the Role below is everything it can do.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ops-mcp
+  namespace: portkeeper-demo
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ops-mcp-checkout
+  namespace: portkeeper-sandbox
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["checkout"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ops-mcp-checkout
+  namespace: portkeeper-sandbox
+subjects:
+  - kind: ServiceAccount
+    name: ops-mcp
+    namespace: portkeeper-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ops-mcp-checkout
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:

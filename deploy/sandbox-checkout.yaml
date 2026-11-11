@@ -1,0 +1,63 @@
+# Stand-in workload for the incident scenario. It reuses the runbooks image
+# only because that image listens on an address taken from its environment:
+# with the wrong address the TCP readiness probe fails while the pod runs.
+# Pods read the ConfigMap at startup only, so fixing it needs a restart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: checkout-config
+  namespace: portkeeper-sandbox
+data:
+  listen: ":9999"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout
+  namespace: portkeeper-sandbox
+  labels:
+    app: checkout
+    portkeeper.dev/agent-managed: "true"
+spec:
+  replicas: 1
+  # Recreate removes the old pod first, so a broken rollout shows 0 ready.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: checkout
+  template:
+    metadata:
+      labels:
+        app: checkout
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: checkout
+          image: portkeeper/runbooks:e2e
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: RUNBOOK_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: checkout-config
+                  key: listen
+          readinessProbe:
+            tcpSocket:
+              port: 9001
+            periodSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
