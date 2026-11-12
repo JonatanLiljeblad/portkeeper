@@ -44,7 +44,9 @@ func TestIncidentAgentThroughGateway(t *testing.T) {
 			PolicyObservedAt:       time.Now(),
 		}
 	}
-	router := NewRouter(reg, NewAgentLimiter(1000, 1000), testAuthenticator(t))
+	// The gateway's default per-identity limit: the agent's own pacing has to
+	// keep session setup plus tool calls inside it.
+	router := NewRouter(reg, NewAgentLimiter(5, 10), testAuthenticator(t))
 	audit := &lockedBuffer{}
 	router.AuditLog = slog.New(slog.NewJSONHandler(audit, nil))
 	gw := httptest.NewServer(router)

@@ -165,3 +165,11 @@ holds five events in order: allowed `read_runbook`, `get_deployment_status`,
 `scale_deployment`. The [decision counters](evidence/incident-decisions.prom)
 for the ops server agree: two allowed status calls, one allowed restart, one
 denied scale.
+
+A second run the same day used a model instead of the script: `qwen2.5:7b`
+served by Ollama on the host, through the Chat Completions compatible
+planner. The [captured run](agent-demo-local.txt) and its
+[audit trail](evidence/incident-audit-local-model.jsonl) show six tool calls:
+four allowed, and two denied (`stream_runbook`, which the model chose
+unprompted, and `scale_deployment`). The Deployment ended at 1 of 1 ready
+with one replica. This is a single run of one small model.

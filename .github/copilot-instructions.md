@@ -81,12 +81,18 @@ backend's pod identity; the controller mounts an API token only when it is
 set, and otherwise forces `automountServiceAccountToken: false`.
 
 `internal/agent` and `hack/incident-agent` run the incident scenario. The
-`Planner` is either the deterministic `IncidentScript` (used by CI, no model)
-or `Anthropic` (Messages API). Tool calls are never retried; model calls may
-be. The model key is read from a file and must never be logged, placed on a
-command line, or stored in the repository. Assistant turns are replayed to
-the API verbatim. `make agent-demo` runs only this scenario;
-`make agent-demo-live` needs `AGENT_LLM_KEY_FILE`. See docs/agent-scenario.md.
+`Planner` is the deterministic `IncidentScript` (used by CI, no model),
+`Anthropic` (Messages API), or `OpenAI` (any Chat Completions compatible API;
+key optional, so it also serves a local Ollama model). Tool calls are never
+retried; model calls may be. The agent paces MCP requests 250 ms apart to
+stay under the gateway's default 5 rps per identity; do not replace pacing
+with retries. The model key is read from a file and must never be logged,
+placed on a command line, or stored in the repository. Assistant turns are
+replayed to the API verbatim. `make agent-demo` runs only this scenario;
+`make agent-demo-local` uses Ollama on the host; `make agent-demo-live`
+takes `AGENT_PROVIDER`, `AGENT_MODEL`, `AGENT_LLM_KEY_FILE` and
+`AGENT_LLM_BASE_URL`. The e2e pod subnet is `10.244.0.0/16`; it must not
+overlap Docker Desktop's `192.168.65.0/24`. See docs/agent-scenario.md.
 
 ## Commands
 

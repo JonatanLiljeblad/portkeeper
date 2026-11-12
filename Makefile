@@ -1,4 +1,4 @@
-.PHONY: tidy build test e2e benchmark agent-demo agent-demo-live manifests generate toy-image kind-up kind-down install-crds run-controller run-gateway run-runbook-server apply-sample monitoring-up grafana-forward
+.PHONY: tidy build test e2e benchmark agent-demo agent-demo-live agent-demo-local manifests generate toy-image kind-up kind-down install-crds run-controller run-gateway run-runbook-server apply-sample monitoring-up grafana-forward
 
 CONTROLLER_GEN := go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5
 
@@ -23,9 +23,19 @@ agent-demo:
 	AGENT_ONLY=1 bash hack/e2e-kind.sh
 
 # The same scenario, then again with a language model choosing the steps.
-# Requires AGENT_LLM_KEY_FILE=/path/outside/the/repo; AGENT_MODEL is optional.
+#   Anthropic:  AGENT_LLM_KEY_FILE=/path/outside/the/repo make agent-demo-live
+#   OpenAI:     AGENT_PROVIDER=openai AGENT_MODEL=<model> AGENT_LLM_KEY_FILE=... make agent-demo-live
+#   Compatible: add AGENT_LLM_BASE_URL=https://host/v1
 agent-demo-live:
 	AGENT_ONLY=1 AGENT_LIVE=1 bash hack/e2e-kind.sh
+
+# The same, with a model served on this machine by Ollama: no key, no cost.
+# Needs `ollama serve` running and the model pulled. host.docker.internal
+# reaches the host from kind on Docker Desktop.
+AGENT_LOCAL_MODEL ?= qwen2.5:7b
+agent-demo-local:
+	AGENT_ONLY=1 AGENT_LIVE=1 AGENT_PROVIDER=openai AGENT_MODEL=$(AGENT_LOCAL_MODEL) \
+		AGENT_LLM_BASE_URL=http://host.docker.internal:11434/v1 bash hack/e2e-kind.sh
 
 # Regenerate config/crd/bases from the Go types in api/v1alpha1.
 manifests:

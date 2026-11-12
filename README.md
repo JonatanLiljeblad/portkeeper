@@ -52,9 +52,12 @@ An agent works an incident on a real Deployment. Its runbook says to restart
 the workload and then scale it up. The gateway allows this agent to restart
 and refuses the scale-up, so the workload recovers with its replica count
 unchanged, and the audit trail shows both decisions against the agent's
-verified identity. This run uses a scripted agent and needs no API key;
-`make agent-demo-live` lets a language model choose the steps. See the
-[scenario](docs/agent-scenario.md) and a [captured run](docs/agent-demo.txt).
+verified identity. This run uses a scripted agent and needs no API key.
+`make agent-demo-local` has a model running on your machine choose the steps,
+also without a key, and `make agent-demo-live` uses your own Anthropic,
+OpenAI or compatible key. See the [scenario](docs/agent-scenario.md), a
+[captured scripted run](docs/agent-demo.txt), and a
+[captured run with a local model](docs/agent-demo-local.txt).
 
 See [PLAN.md](./PLAN.md) for the full design rationale and roadmap, and
 [docs/architecture.md](./docs/architecture.md) for how the pieces fit

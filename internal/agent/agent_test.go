@@ -108,6 +108,99 @@ func TestAnthropicPlannerFailures(t *testing.T) {
 	}
 }
 
+func TestOpenAIPlannerToolLoop(t *testing.T) {
+	const firstMessage = `{"role":"assistant","content":null,"reasoning":"plan",` +
+		`"tool_calls":[{"id":"call_1","type":"function","function":{"name":"ops__scale_deployment","arguments":"{\"name\":\"checkout\",\"replicas\":3}"}}]}`
+	var requests []map[string]json.RawMessage
+	var auth []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		auth = append(auth, r.Header.Get("Authorization"))
+		var request map[string]json.RawMessage
+		data, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(data, &request); err != nil {
+			t.Error(err)
+		}
+		requests = append(requests, request)
+		switch len(requests) {
+		case 1:
+			// Hosted reasoning models refuse the older limit parameter.
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead."}}`)
+		case 2:
+			io.WriteString(w, `{"choices":[{"message":`+firstMessage+`,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":90,"completion_tokens":15}}`)
+		default:
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"Scaling was refused."},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":8}}`)
+		}
+	}))
+	defer server.Close()
+
+	planner := &OpenAI{BaseURL: server.URL + "/v1", Model: "local-model", RetryDelay: time.Millisecond}
+	planner.Begin("resolve it", []ToolSpec{{Name: "ops__scale_deployment", Description: "scale", InputSchema: json.RawMessage(`{"type":"object"}`)}})
+	step, err := planner.Next(t.Context(), nil)
+	if err != nil || len(step.Calls) != 1 || step.Calls[0].ID != "call_1" || step.Calls[0].Name != "ops__scale_deployment" ||
+		string(step.Calls[0].Input) != `{"name":"checkout","replicas":3}` {
+		t.Fatalf("unexpected first step: %+v %v", step, err)
+	}
+	planner.KeyFile = keyFile(t)
+	step, err = planner.Next(t.Context(), []ToolResult{{ID: "call_1", Content: "by gateway policy: no", IsError: true, Denied: true}})
+	if err != nil || len(step.Calls) != 0 || step.Text != "Scaling was refused." {
+		t.Fatalf("unexpected final step: %+v %v", step, err)
+	}
+	if usage := planner.Usage(); usage != (Usage{ModelCalls: 2, InputTokens: 210, OutputTokens: 23}) {
+		t.Fatalf("usage = %+v", usage)
+	}
+	// A keyless endpoint gets no credential header; a key becomes a bearer token.
+	if len(auth) != 3 || auth[0] != "" || auth[1] != "" || auth[2] != "Bearer "+testKey {
+		t.Fatalf("authorization headers = %q", auth)
+	}
+	if requests[0]["max_tokens"] == nil || requests[1]["max_completion_tokens"] == nil || requests[1]["max_tokens"] != nil ||
+		requests[2]["max_completion_tokens"] == nil || !strings.Contains(string(requests[1]["tools"]), `"parameters":{"type":"object"}`) {
+		t.Fatalf("unexpected request parameters: %v", requests)
+	}
+	var messages []json.RawMessage
+	if err := json.Unmarshal(requests[2]["messages"], &messages); err != nil || len(messages) != 4 {
+		t.Fatalf("conversation = %s", requests[2]["messages"])
+	}
+	if string(messages[2]) != firstMessage {
+		t.Fatalf("assistant turn was not echoed verbatim: %s", messages[2])
+	}
+	if want := `{"content":"DENIED by gateway policy: no","role":"tool","tool_call_id":"call_1"}`; string(messages[3]) != want {
+		t.Fatalf("tool result = %s", messages[3])
+	}
+}
+
+func TestOpenAIPlannerAssignsMissingCallIDs(t *testing.T) {
+	var second map[string]json.RawMessage
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"ops__get_deployment_status","arguments":""}}]},"finish_reason":"tool_calls"}]}`)
+			return
+		}
+		data, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(data, &second)
+		io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+	planner := &OpenAI{BaseURL: server.URL, Model: "local-model"}
+	planner.Begin("task", nil)
+	step, err := planner.Next(t.Context(), nil)
+	if err != nil || len(step.Calls) != 1 || step.Calls[0].ID == "" || string(step.Calls[0].Input) != "{}" {
+		t.Fatalf("unexpected step: %+v %v", step, err)
+	}
+	if _, err := planner.Next(t.Context(), []ToolResult{{ID: step.Calls[0].ID, Content: "ok"}}); err != nil {
+		t.Fatal(err)
+	}
+	// The assigned id must appear on both the stored call and its result.
+	if strings.Count(string(second["messages"]), `"`+step.Calls[0].ID+`"`) != 2 {
+		t.Fatalf("call id not consistent in conversation: %s", second["messages"])
+	}
+}
+
 func TestScriptStopsAtFirstFailure(t *testing.T) {
 	script := IncidentScript(0)
 	step, _ := script.Next(t.Context(), nil)

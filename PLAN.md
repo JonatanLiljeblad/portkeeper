@@ -243,8 +243,9 @@ Ordering: moved ahead of OAuth after checkpoint 6. The scenario depends only
 on tool policy and audit, which exist; OAuth is larger, riskier, and not a
 dependency of the demo.
 
-Status: scripted scenario complete and proven in kind. The live model run
-and the recording are outstanding; they need a model API key at run time.
+Status: complete with a local model. The scripted scenario and a
+model-driven run are proven in kind. Neither hosted API has been called, and
+no screen recording exists yet.
 
 Decision: the headline demo uses a real LLM agent, through the Anthropic
 Messages API. CI runs a deterministic
@@ -278,11 +279,24 @@ agent's verified identity on the Deployment, and the audit trail holds the
 allowed restart and the denied scale. `docs/agent-scenario.md` and a captured
 run document it.
 
-Not yet met: the Anthropic planner is tested against a local stand-in for
-the API but has not been run against the real API, so the acceptance clause
-"with a key supplied, the live agent scenario" is unverified and no recording
-exists. `make agent-demo-live` is the command; its model-driven result may
-differ from the script, including not attempting the scale-up.
+Model support was widened after the first delivery: besides the Anthropic
+planner there is one for any Chat Completions compatible API, which covers
+OpenAI, other hosted providers, and a local model server. `make
+agent-demo-local` runs the scenario with a model served by Ollama on the
+host, without a key. One such run (`qwen2.5:7b`) resolved the incident, was
+refused the scale-up, and is captured unedited in `docs/agent-demo-local.txt`;
+the model also made an unrequested call that was refused and continued after
+a refusal despite its instructions, with policy holding throughout.
+
+Two defects surfaced only in the real cluster and are fixed: the agent
+exceeded the gateway's default rate limit and now paces its requests, and the
+e2e pod network overlapped Docker Desktop's host address and is now
+`10.244.0.0/16`.
+
+Not yet met: neither hosted API (Anthropic, OpenAI) has been called; those
+planners are tested against local stand-ins written from the providers'
+documentation. No screen recording exists; the evidence is captured terminal
+output.
 
 Remaining limitations: one scenario and one policy, not an evaluation of
 model behaviour; the ops backend exports no execution metrics; the dashboard

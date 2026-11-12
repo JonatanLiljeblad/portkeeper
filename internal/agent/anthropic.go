@@ -1,14 +1,10 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -154,86 +150,16 @@ func (a *Anthropic) model() string {
 	return DefaultAnthropicModel
 }
 
-// post sends one request, retrying only overload and server errors. A model
-// call has no side effects, unlike a tool call, so retrying it is safe.
 func (a *Anthropic) post(ctx context.Context, body []byte, out any) error {
-	base := strings.TrimRight(a.BaseURL, "/")
+	base := a.BaseURL
 	if base == "" {
 		base = DefaultAnthropicBaseURL
 	}
-	client := a.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: modelCallTimeout}
-	}
-	delay := a.RetryDelay
-	if delay <= 0 {
-		delay = 2 * time.Second
-	}
-	var last error
-	for attempt := 0; attempt <= maxModelRetries; attempt++ {
-		if attempt != 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(delay):
-			}
-			delay *= 2
-		}
-		retry, err := a.attempt(ctx, client, base, body, out)
-		if err == nil {
-			return nil
-		}
-		last = err
-		if !retry {
-			break
-		}
-	}
-	return last
-}
-
-func (a *Anthropic) attempt(ctx context.Context, client *http.Client, base string, body []byte, out any) (retry bool, err error) {
-	key, err := os.ReadFile(a.KeyFile)
-	if err != nil {
-		return false, errors.New("cannot read the model API key file")
-	}
-	secret := strings.TrimSpace(string(key))
-	if secret == "" || strings.ContainsAny(secret, " \t\r\n") {
-		return false, errors.New("model API key file must contain exactly one key")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return false, errors.New("invalid model API base URL")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", anthropicVersion)
-	req.Header.Set("x-api-key", secret)
-	res, err := client.Do(req)
-	if err != nil {
-		// Transport errors can embed the URL but never request headers.
-		return ctx.Err() == nil, fmt.Errorf("model API request failed: %w", err)
-	}
-	defer res.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(res.Body, maxResponseBytes))
-	if err != nil {
-		return true, fmt.Errorf("read model API response: %w", err)
-	}
-	if res.StatusCode != http.StatusOK {
-		var apiErr struct {
-			Error struct {
-				Type    string `json:"type"`
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		_ = json.Unmarshal(data, &apiErr)
-		detail := strings.ReplaceAll(apiErr.Error.Type+": "+apiErr.Error.Message, secret, "[redacted]")
-		if len(detail) > maxErrorTextBytes {
-			detail = detail[:maxErrorTextBytes]
-		}
-		return res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500,
-			fmt.Errorf("model API returned HTTP %d (%s)", res.StatusCode, detail)
-	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return false, errors.New("model API returned an unreadable response")
-	}
-	return false, nil
+	return modelEndpoint{
+		baseURL: base, keyFile: a.KeyFile, client: a.HTTPClient, retryDelay: a.RetryDelay,
+		authorize: func(req *http.Request, key string) {
+			req.Header.Set("anthropic-version", anthropicVersion)
+			req.Header.Set("x-api-key", key)
+		},
+	}.post(ctx, "/v1/messages", body, out)
 }

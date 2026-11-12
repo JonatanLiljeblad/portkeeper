@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -87,6 +89,64 @@ type Config struct {
 	Task       string
 	MaxSteps   int
 	Output     io.Writer
+	// RequestInterval is the minimum spacing between HTTP requests to MCP
+	// servers. Zero uses DefaultRequestInterval; negative disables pacing.
+	RequestInterval time.Duration
+}
+
+// DefaultRequestInterval keeps the agent at four requests per second, under
+// the gateway's default per-identity limit of five. Session setup and tool
+// discovery count against that limit as well as tool calls, so an unpaced
+// agent would be refused part-way through a task.
+const DefaultRequestInterval = 250 * time.Millisecond
+
+// pacedTransport spaces requests instead of retrying refused ones: a refused
+// tool call must not be repeated blindly, so the agent avoids the refusal.
+type pacedTransport struct {
+	base     http.RoundTripper
+	interval time.Duration
+	mu       sync.Mutex
+	next     time.Time
+}
+
+func (p *pacedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	p.mu.Lock()
+	now := time.Now()
+	wait := p.next.Sub(now)
+	if wait < 0 {
+		wait = 0
+	}
+	p.next = now.Add(wait + p.interval)
+	p.mu.Unlock()
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		case <-timer.C:
+		}
+	}
+	return p.base.RoundTrip(req)
+}
+
+func paced(client *http.Client, interval time.Duration) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if interval == 0 {
+		interval = DefaultRequestInterval
+	}
+	if interval < 0 {
+		return client
+	}
+	base := client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	out := *client
+	out.Transport = &pacedTransport{base: base, interval: interval}
+	return &out
 }
 
 type Report struct {
@@ -113,12 +173,13 @@ func Run(ctx context.Context, cfg Config) (report Report, err error) {
 	known := map[string]bool{}
 	var tools []ToolSpec
 	client := mcp.NewClient(&mcp.Implementation{Name: "portkeeper-agent", Version: "0.1.0"}, nil)
+	httpClient := paced(cfg.HTTPClient, cfg.RequestInterval)
 	for _, server := range cfg.Servers {
 		if !serverName.MatchString(server.Name) || sessions[server.Name] != nil {
 			return report, fmt.Errorf("invalid or duplicate server name %q", server.Name)
 		}
 		session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-			Endpoint: server.Endpoint, HTTPClient: cfg.HTTPClient, MaxRetries: -1, DisableStandaloneSSE: true,
+			Endpoint: server.Endpoint, HTTPClient: httpClient, MaxRetries: -1, DisableStandaloneSSE: true,
 		}, nil)
 		if err != nil {
 			return report, fmt.Errorf("connect to %s: %w", server.Name, err)

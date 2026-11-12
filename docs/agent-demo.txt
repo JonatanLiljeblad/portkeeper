@@ -22,9 +22,9 @@ result ok # Checkout not ready ...
 call   ops__get_deployment_status {"name":"checkout"}
 result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0,"ready":false}
 call   ops__restart_deployment {"name":"checkout"}
-result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0,"ready":false,"lastRestartedAt":"2026-11-11T18:10:49Z","lastRestarte ...
+result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0,"ready":false,"lastRestartedAt":"2026-11-12T01:16:13Z","lastRestarte ...
 call   ops__get_deployment_status {"name":"checkout","waitSeconds":60}
-result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1,"ready":true,"lastRestartedAt":"2026-11-11T18:10:49Z","lastRestarted ...
+result ok {"name":"checkout","namespace":"portkeeper-sandbox","desiredReplicas":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1,"ready":true,"lastRestartedAt":"2026-11-12T01:16:13Z","lastRestarted ...
 call   ops__scale_deployment {"name":"checkout","replicas":3}
 result DENIED by gateway policy: tool "scale_deployment" is not permitted for this client by gateway policy
 final  Scripted replay finished.
@@ -37,14 +37,14 @@ final  Scripted replay finished.
 usage  tool_calls=5 denied=1 model_calls=0 input_tokens=0 output_tokens=0
 --- Operator view: the sandbox afterwards ---
 NAME       READY   UP-TO-DATE   AVAILABLE   AGE
-checkout   1/1     1            1           13s
+checkout   1/1     1            1           17s
 restarted-by: system:serviceaccount:portkeeper-demo:mcp-incident-agent
 --- Operator view: gateway audit trail for the agent ---
-{"time":"2026-11-11T18:10:49.335062179Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"runbooks","tool":"read_runbook","decision":"allow","reason":"tool_listed"}
-{"time":"2026-11-11T18:10:49.336602012Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"get_deployment_status","decision":"allow","reason":"tool_listed"}
-{"time":"2026-11-11T18:10:49.522459346Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"restart_deployment","decision":"allow","reason":"tool_listed"}
-{"time":"2026-11-11T18:10:49.720525429Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"get_deployment_status","decision":"allow","reason":"tool_listed"}
-{"time":"2026-11-11T18:10:50.730124846Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"scale_deployment","decision":"deny","reason":"tool_not_listed"}
+{"time":"2026-11-12T01:16:12.834028252Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"runbooks","tool":"read_runbook","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-12T01:16:13.083342835Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"get_deployment_status","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-12T01:16:13.333379044Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"restart_deployment","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-12T01:16:13.584008127Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"get_deployment_status","decision":"allow","reason":"tool_listed"}
+{"time":"2026-11-12T01:16:15.604698545Z","level":"INFO","msg":"mcp_tool_decision","agent":"system:serviceaccount:portkeeper-demo:mcp-incident-agent","namespace":"portkeeper-demo","server":"ops","tool":"scale_deployment","decision":"deny","reason":"tool_not_listed"}
 --- Operator view: gateway decision counters for the ops server ---
 mcp_gateway_tool_decisions_total{decision="allow",namespace="portkeeper-demo",server="ops",tool="get_deployment_status"} 2
 mcp_gateway_tool_decisions_total{decision="allow",namespace="portkeeper-demo",server="ops",tool="restart_deployment"} 1

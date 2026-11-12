@@ -7,12 +7,19 @@ cluster="${E2E_CLUSTER_NAME:-portkeeper-e2e-$$}"
 keep="${KEEP_CLUSTER:-0}"
 benchmark="${RUN_BENCHMARK:-0}"
 # AGENT_ONLY=1 runs just the incident scenario after the minimal setup.
-# AGENT_LIVE=1 additionally lets a language model work the incident; it needs
-# AGENT_LLM_KEY_FILE, a file outside the repository holding the API key.
+# AGENT_LIVE=1 additionally lets a language model work the incident.
+#   AGENT_PROVIDER      anthropic (default) or openai (any Chat Completions
+#                       compatible API, including a local model server)
+#   AGENT_LLM_KEY_FILE  file outside the repository holding the API key;
+#                       required for anthropic, optional for openai
+#   AGENT_MODEL         model name; required for openai
+#   AGENT_LLM_BASE_URL  API base URL; defaults to the provider's hosted API
 agent_only="${AGENT_ONLY:-0}"
 agent_live="${AGENT_LIVE:-0}"
+agent_provider="${AGENT_PROVIDER:-anthropic}"
 agent_key_file="${AGENT_LLM_KEY_FILE:-}"
 agent_model="${AGENT_MODEL:-}"
+agent_base_url="${AGENT_LLM_BASE_URL:-}"
 node_image="kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0"
 calico_version="v3.32.0"
 calico_sha256="bccabc607685551db918f66da724893eca3e69a50c5a3e3077029b02dbab8d35"
@@ -38,17 +45,35 @@ if [[ "$agent_only" == 1 && "$benchmark" == 1 ]]; then
   exit 1
 fi
 if [[ "$agent_live" == 1 ]]; then
-  if [[ -z "$agent_key_file" || ! -s "$agent_key_file" ]]; then
-    echo "AGENT_LIVE=1 needs AGENT_LLM_KEY_FILE: a non-empty file holding the model API key" >&2
+  if [[ "$agent_provider" != anthropic && "$agent_provider" != openai ]]; then
+    echo "AGENT_PROVIDER must be anthropic or openai" >&2
     exit 1
   fi
-  agent_key_file="$(cd "$(dirname "$agent_key_file")" && pwd -P)/$(basename "$agent_key_file")"
-  if [[ "$agent_key_file" == "$PWD"/* ]]; then
-    echo "Keep the model API key file outside the repository" >&2
+  if [[ "$agent_provider" == anthropic && -z "$agent_key_file" ]]; then
+    echo "AGENT_PROVIDER=anthropic needs AGENT_LLM_KEY_FILE: a file holding the model API key" >&2
     exit 1
   fi
-  if [[ -n "$agent_model" && ! "$agent_model" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+  if [[ "$agent_provider" == openai && -z "$agent_model" ]]; then
+    echo "AGENT_PROVIDER=openai needs AGENT_MODEL" >&2
+    exit 1
+  fi
+  if [[ -n "$agent_key_file" ]]; then
+    if [[ ! -s "$agent_key_file" ]]; then
+      echo "AGENT_LLM_KEY_FILE must be a non-empty file holding the model API key" >&2
+      exit 1
+    fi
+    agent_key_file="$(cd "$(dirname "$agent_key_file")" && pwd -P)/$(basename "$agent_key_file")"
+    if [[ "$agent_key_file" == "$PWD"/* ]]; then
+      echo "Keep the model API key file outside the repository" >&2
+      exit 1
+    fi
+  fi
+  if [[ -n "$agent_model" && ! "$agent_model" =~ ^[A-Za-z0-9._:/-]+$ ]]; then
     echo "AGENT_MODEL contains unsupported characters" >&2
+    exit 1
+  fi
+  if [[ -n "$agent_base_url" && ! "$agent_base_url" =~ ^https?://[A-Za-z0-9._:/-]+$ ]]; then
+    echo "AGENT_LLM_BASE_URL must be a plain http(s) URL without credentials or a query" >&2
     exit 1
   fi
 fi
@@ -356,9 +381,16 @@ stage_incident() {
 
 # run_agent <pod-name> <planner> starts the agent with its own gateway token.
 run_agent() {
-  local pod planner
+  local pod planner with_key deadline
   pod="$1"
   planner="$2"
+  with_key=0
+  deadline=300
+  if [[ "$planner" != script ]]; then
+    # A model, especially a local one, needs longer than the replay.
+    deadline=600
+    if [[ -n "$agent_key_file" ]]; then with_key=1; fi
+  fi
   {
     cat <<EOF
 apiVersion: v1
@@ -372,7 +404,7 @@ spec:
   restartPolicy: Never
   serviceAccountName: mcp-incident-agent
   automountServiceAccountToken: false
-  activeDeadlineSeconds: 330
+  activeDeadlineSeconds: $((deadline + 30))
   securityContext:
     runAsNonRoot: true
     seccompProfile:
@@ -386,7 +418,7 @@ spec:
               audience: portkeeper
               expirationSeconds: 600
 EOF
-    if [[ "$planner" == anthropic ]]; then
+    if [[ "$with_key" == 1 ]]; then
       printf '    - name: llm-key\n      secret:\n        secretName: agent-llm-key\n        defaultMode: 0444\n'
     fi
     cat <<EOF
@@ -410,7 +442,7 @@ EOF
           mountPath: /var/run/portkeeper
           readOnly: true
 EOF
-    if [[ "$planner" == anthropic ]]; then
+    if [[ "$with_key" == 1 ]]; then
       printf '        - name: llm-key\n          mountPath: /var/run/llm\n          readOnly: true\n'
     fi
     cat <<EOF
@@ -419,16 +451,17 @@ EOF
         - "-ops-endpoint=http://mcp-gateway.portkeeper-system.svc.cluster.local:8080/portkeeper-demo/ops/mcp"
         - "-token-file=/var/run/portkeeper/token"
         - "-planner=$planner"
-        - "-timeout=5m"
+        - "-timeout=${deadline}s"
 EOF
-    if [[ "$planner" == anthropic ]]; then
-      printf '        - "-llm-key-file=/var/run/llm/api-key"\n'
+    if [[ "$planner" != script ]]; then
+      if [[ "$with_key" == 1 ]]; then printf '        - "-llm-key-file=/var/run/llm/api-key"\n'; fi
       if [[ -n "$agent_model" ]]; then printf '        - "-model=%s"\n' "$agent_model"; fi
+      if [[ -n "$agent_base_url" ]]; then printf '        - "-llm-base-url=%s"\n' "$agent_base_url"; fi
     fi
   } | k apply -f - >/dev/null
   # Wait for either terminal phase so a failed agent is reported at once.
   local phase attempt
-  for attempt in {1..340}; do
+  for ((attempt = 0; attempt < deadline + 40; attempt++)); do
     phase="$(k get pod -n portkeeper-demo "$pod" -o 'jsonpath={.status.phase}')"
     if [[ "$phase" == Succeeded || "$phase" == Failed ]]; then break; fi
     sleep 1
@@ -515,11 +548,15 @@ incident_scenario() {
   incident_demo script
   if [[ "$agent_live" == 1 ]]; then
     echo "=== Live: a language model works the same incident ==="
-    k create secret generic agent-llm-key -n portkeeper-demo --from-file=api-key="$agent_key_file" >/dev/null
+    if [[ -n "$agent_key_file" ]]; then
+      k create secret generic agent-llm-key -n portkeeper-demo --from-file=api-key="$agent_key_file" >/dev/null
+    fi
     local status=0
-    incident_demo anthropic || status=$?
+    incident_demo "$agent_provider" || status=$?
     # The key leaves the cluster with the run, even when the cluster is kept.
-    k delete secret agent-llm-key -n portkeeper-demo >/dev/null
+    if [[ -n "$agent_key_file" ]]; then
+      k delete secret agent-llm-key -n portkeeper-demo >/dev/null
+    fi
     return "$status"
   fi
 }
